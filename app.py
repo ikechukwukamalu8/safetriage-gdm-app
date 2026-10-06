@@ -21,7 +21,7 @@ from xgboost import XGBClassifier
 
 # Page layout configuration
 st.set_page_config(page_title="SafeTriage GDM Platform", layout="wide")
-st.title("🛡️ SafeTriage-GDM: Uncertainty-Quantified Triage System")
+st.title("SafeTriage-GDM: Uncertainty-Quantified Triage System")
 st.markdown("### Production-Grade Enterprise Platform with Dynamic 95% Conformal Set Tuning & Real Drift Telemetry")
 st.write("---")
 
@@ -84,7 +84,7 @@ def autonomous_unsupervised_parameter_sift(trained_models, X_new_batch, current_
     return current_q, False
 
 # 4. ENTERPRISE DATA INGESTION PROTOCOL
-st.header("📋 Arden Ingestion Protocol: CBGS Mixed-Type Registry")
+st.header("Arden Ingestion Protocol: CBGS Mixed-Type Registry")
 uploaded_file = st.file_uploader("Browse files or drop your clinic master spreadsheet here:", type=["xlsx", "csv"])
 
 if uploaded_file is not None:
@@ -113,10 +113,8 @@ if uploaded_file is not None:
     # Automated processing for mixed categorical text indicators
     X_encoded = pd.get_dummies(X_raw, drop_first=True, dummy_na=False)
     
-    # Align and preserve numeric schema formatting parameters
-    for col in X_encoded.columns:
-        if X_encoded[col].dtype == 'bool':
-            X_encoded[col] = X_encoded[col].astype(int)
+    # Force pure numeric float64 matrix array to guarantee compatibility with scikit-learn imputers
+    X_encoded = X_encoded.astype(np.float64)
             
     feature_names = X_encoded.columns.tolist()
     X_matrix = X_encoded.values
@@ -308,7 +306,7 @@ if uploaded_file is not None:
     ])
 
     with tab_triage:
-        st.subheader("🖥️️ Clinical Production Triage Database Log")
+        st.subheader("🖥 Clinical Production Triage Database Log")
         st.dataframe(final_output_view)
         st.write("---")
         
