@@ -1,47 +1,76 @@
 # ==============================================================================
 # SafeTriage-GDM
 # Uncertainty-Quantified Clinical Triage System for Gestational Diabetes
-# Mellitus (GDM) Risk with Algorithmic Fairness Auditing & Conformal Safety Bounds
+# Mellitus (GDM) Risk with Algorithmic Fairness Auditing &
+# Conformal Safety Bounds
 #
 # Standalone Research Prototype
+#
+# Required ensemble:
+#   1. Random Forest
+#   2. XGBoost
+#   3. Logistic Regression
+#
+# Data split:
+#   60% Training
+#   15% Calibration
+#   25% Untouched Test
+#
+# No synthetic labels are generated.
 # ==============================================================================
 
 import os
 import io
 import pickle
+import hashlib
 import warnings
+from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.impute import IterativeImputer
 from sklearn.linear_model import LogisticRegression
+from sklearn.impute import IterativeImputer
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.calibration import (
+    CalibratedClassifierCV,
+    calibration_curve,
+)
 from sklearn.metrics import (
-    accuracy_score,
-    average_precision_score,
-    brier_score_loss,
-    confusion_matrix,
-    f1_score,
-    log_loss,
-    precision_score,
-    recall_score,
     roc_auc_score,
     roc_curve,
+    average_precision_score,
+    precision_recall_curve,
+    brier_score_loss,
+    log_loss,
+    confusion_matrix,
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
 )
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.calibration import CalibratedClassifierCV, calibration_curve
-from sklearn.frozen import FrozenEstimator
+from sklearn.exceptions import ConvergenceWarning
 
 from imblearn.combine import SMOTETomek
 from xgboost import XGBClassifier
 
 
-# ==============================================================================
-# CONFIGURATION
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# GLOBAL CONFIGURATION
+# ------------------------------------------------------------------------------
+
+warnings.filterwarnings("ignore", category=ConvergenceWarning)
+warnings.filterwarnings("ignore", message=".*cv='prefit'.*")
+
+st.set_page_config(
+    page_title="SafeTriage-GDM",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 APP_TITLE = "SafeTriage-GDM"
 
@@ -56,17 +85,12 @@ APP_VERSION = "Research Prototype"
 ARTIFACT_PATH = "safetriage_gdm_mixed_pipeline.pkl"
 
 TARGET_COLUMN = "Gestational diabetes?"
-ID_COLUMN = "Dummy Study Number"
 AGE_COLUMN = "Age"
-BMI_COLUMN = "BMI"
-
-RANDOM_STATE = 42
+ID_COLUMN = "Dummy Study Number"
 
 RISK_THRESHOLD = 0.50
-
-CONFORMAL_ALPHA = 0.05
-
-DRIFT_THRESHOLD = 0.20
+CONFORMAL_LEVEL = 0.95
+DRIFT_LIMIT = 0.20
 
 EXPECTED_MODELS = {
     "Random Forest",
@@ -74,50 +98,50 @@ EXPECTED_MODELS = {
     "Logistic Regression",
 }
 
-
-# ==============================================================================
-# STREAMLIT PAGE
-# ==============================================================================
-
-st.set_page_config(
-    page_title=APP_TITLE,
-    page_icon="🛡️",
-    layout="wide",
-)
+EXPECTED_MODEL_ORDER = [
+    "Random Forest",
+    "XGBoost",
+    "Logistic Regression",
+]
 
 
-# ==============================================================================
-# GLOBAL STYLE
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# PAGE STYLING
+# ------------------------------------------------------------------------------
 
 st.markdown(
     """
     <style>
-    .main-header {
+    .main-title {
         font-size: 2.2rem;
         font-weight: 700;
-        margin-bottom: 0.25rem;
+        margin-bottom: 0.2rem;
     }
 
-    .sub-header {
+    .subtitle {
         font-size: 1.05rem;
-        color: #6b7280;
+        color: #666;
+        margin-bottom: 1.0rem;
+    }
+
+    .research-box {
+        padding: 1rem;
+        border-radius: 0.7rem;
+        border: 1px solid rgba(128,128,128,0.25);
+        background-color: rgba(128,128,128,0.05);
         margin-bottom: 1rem;
     }
 
-    .risk-card {
-        padding: 1rem;
-        border-radius: 0.75rem;
-        border: 1px solid rgba(128,128,128,0.25);
-        margin-bottom: 0.75rem;
+    .metric-note {
+        font-size: 0.82rem;
+        color: #666;
     }
 
-    .disclaimer {
-        padding: 0.9rem;
+    .uncertainty-card {
+        padding: 0.8rem;
         border-radius: 0.6rem;
-        background-color: rgba(255, 193, 7, 0.10);
-        border: 1px solid rgba(255, 193, 7, 0.35);
-        font-size: 0.9rem;
+        border: 1px solid rgba(128,128,128,0.2);
+        margin-bottom: 0.5rem;
     }
     </style>
     """,
@@ -125,73 +149,96 @@ st.markdown(
 )
 
 
-# ==============================================================================
+# ------------------------------------------------------------------------------
 # HEADER
-# ==============================================================================
+# ------------------------------------------------------------------------------
 
 st.markdown(
-    f'<div class="main-header">🛡️ {APP_TITLE}</div>',
+    f'<div class="main-title">🛡️ {APP_TITLE}</div>',
     unsafe_allow_html=True,
 )
 
 st.markdown(
-    f'<div class="sub-header">{APP_SUBTITLE}</div>',
+    f'<div class="subtitle">{APP_SUBTITLE}</div>',
     unsafe_allow_html=True,
 )
 
 st.markdown(
     """
-    <div class="disclaimer">
-    <strong>Research prototype:</strong>
-    SafeTriage-GDM is intended for uncertainty-aware GDM risk triage,
-    conformal safety assessment, population-shift monitoring, and
-    algorithmic fairness auditing. It is not a medical device and must
-    not be used as a substitute for professional medical diagnosis,
-    treatment, or clinical decision-making.
+    <div class="research-box">
+    <strong>Research prototype:</strong> SafeTriage-GDM is intended for
+    uncertainty-aware GDM risk triage, conformal safety assessment,
+    population-shift monitoring, and algorithmic fairness auditing.
+    It is not a medical device and must not be used as a substitute for
+    professional medical diagnosis, treatment, or clinical decision-making.
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-st.divider()
+
+# ------------------------------------------------------------------------------
+# UTILITY FUNCTIONS
+# ------------------------------------------------------------------------------
+
+def dataset_hash(dataframe: pd.DataFrame) -> str:
+    """Generate a deterministic hash for the uploaded dataset."""
+    raw = pd.util.hash_pandas_object(
+        dataframe,
+        index=True,
+    ).values.tobytes()
+
+    return hashlib.sha256(raw).hexdigest()
 
 
-# ==============================================================================
-# REPRODUCIBILITY / WARNINGS
-# ==============================================================================
+def safe_float(value, default=np.nan) -> float:
+    """Convert a value to float safely."""
+    try:
+        value = float(value)
+        if np.isfinite(value):
+            return value
+    except Exception:
+        pass
 
-warnings.filterwarnings(
-    "ignore",
-    message=".*does not have valid feature names.*",
-)
+    return default
 
 
-# ==============================================================================
-# TARGET PARSING
-# ==============================================================================
-
-def parse_gdm_target(series):
+def binary_entropy(probabilities):
     """
-    Convert common GDM outcome representations to binary 0/1.
+    Bernoulli entropy in nats.
 
-    Accepted examples include:
-        0 / 1
-        Yes / No
-        Y / N
-        True / False
-        Positive / Negative
-        GDM / No GDM
+    H(p) = -p log(p) - (1-p) log(1-p)
     """
+    p = np.asarray(probabilities, dtype=float)
+    p = np.clip(p, 1e-12, 1 - 1e-12)
 
+    return -(
+        p * np.log(p)
+        + (1.0 - p) * np.log(1.0 - p)
+    )
+
+
+def normalize_binary_target(series: pd.Series) -> pd.Series:
+    """
+    Parse common binary GDM encodings.
+
+    Returns:
+        0, 1, or NaN.
+    """
     if pd.api.types.is_numeric_dtype(series):
         numeric = pd.to_numeric(series, errors="coerce")
 
-        unique_values = set(
+        unique = set(
             numeric.dropna().unique().tolist()
         )
 
-        if unique_values.issubset({0, 1}):
+        if unique.issubset({0, 1}):
             return numeric.astype(float)
+
+        return numeric.where(
+            numeric.isin([0, 1]),
+            np.nan,
+        )
 
     text = (
         series.astype(str)
@@ -199,29 +246,28 @@ def parse_gdm_target(series):
         .str.lower()
     )
 
-    positive_values = {
+    positive = {
         "1",
         "yes",
         "y",
         "true",
         "positive",
-        "pos",
         "gdm",
+        "diabetes",
         "gestational diabetes",
-        "gestational diabetes mellitus",
+        "present",
     }
 
-    negative_values = {
+    negative = {
         "0",
         "no",
         "n",
         "false",
         "negative",
-        "neg",
-        "normal",
+        "non-gdm",
         "no gdm",
-        "no gestational diabetes",
-        "healthy",
+        "absent",
+        "none",
     }
 
     result = pd.Series(
@@ -230,462 +276,562 @@ def parse_gdm_target(series):
         dtype=float,
     )
 
-    result[text.isin(positive_values)] = 1.0
-    result[text.isin(negative_values)] = 0.0
-
-    numeric = pd.to_numeric(series, errors="coerce")
-
-    result[numeric.eq(1)] = 1.0
-    result[numeric.eq(0)] = 0.0
+    result.loc[text.isin(positive)] = 1.0
+    result.loc[text.isin(negative)] = 0.0
 
     return result
 
 
-# ==============================================================================
+def detect_target_column(dataframe: pd.DataFrame) -> Optional[str]:
+    """Find the GDM outcome column."""
+    if TARGET_COLUMN in dataframe.columns:
+        return TARGET_COLUMN
+
+    candidates = [
+        "GDM",
+        "gdm",
+        "GDM Risk",
+        "GDM Outcome",
+        "GDM outcome",
+        "Gestational Diabetes",
+        "Gestational diabetes",
+        "Gestational diabetes mellitus",
+        "Outcome",
+        "outcome",
+    ]
+
+    lower_map = {
+        str(column).strip().lower(): column
+        for column in dataframe.columns
+    }
+
+    for candidate in candidates:
+        key = candidate.strip().lower()
+        if key in lower_map:
+            return lower_map[key]
+
+    return None
+
+
+def detect_age_column(dataframe: pd.DataFrame) -> Optional[str]:
+    """Find the age column."""
+    if AGE_COLUMN in dataframe.columns:
+        return AGE_COLUMN
+
+    candidates = [
+        "age",
+        "maternal age",
+        "mother age",
+        "age_years",
+    ]
+
+    lower_map = {
+        str(column).strip().lower(): column
+        for column in dataframe.columns
+    }
+
+    for candidate in candidates:
+        key = candidate.lower()
+        if key in lower_map:
+            return lower_map[key]
+
+    return None
+
+
+# ------------------------------------------------------------------------------
 # DATA ENCODING
-# ==============================================================================
+# ------------------------------------------------------------------------------
 
-def encode_dataframe(df):
+def encode_dataframe(
+    dataframe: pd.DataFrame,
+) -> pd.DataFrame:
     """
-    One-hot encode categorical variables.
-
-    The resulting dataframe is explicitly converted to float64 so that
-    downstream sklearn transformations receive a consistent numeric matrix.
+    Convert categorical variables to one-hot encoded numerical variables.
     """
-
-    encoded_df = pd.get_dummies(
-        df,
+    encoded = pd.get_dummies(
+        dataframe,
         drop_first=True,
         dummy_na=False,
     )
 
-    return encoded_df.astype(np.float64)
+    return encoded.astype(np.float64)
 
 
-def align_to_schema(encoded_df, feature_schema):
+def align_to_schema(
+    encoded_dataframe: pd.DataFrame,
+    feature_schema: List[str],
+) -> pd.DataFrame:
     """
-    Force inference data to exactly match the training feature schema.
-    Missing training columns are filled with zero.
-    Extra inference-only columns are removed.
+    Force inference data to exactly match training feature schema.
     """
-
-    aligned_df = encoded_df.reindex(
+    aligned = encoded_dataframe.reindex(
         columns=feature_schema,
         fill_value=0.0,
     )
 
-    return aligned_df.astype(np.float64)
+    return aligned.astype(np.float64)
 
 
-# ==============================================================================
-# PROBABILITY HELPERS
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# MODEL CONSTRUCTION
+# ------------------------------------------------------------------------------
 
-def get_probability_from_model(model, X):
+def create_three_model_ensemble() -> Dict[str, object]:
     """
-    Safely extract P(GDM=1).
+    Create the mandatory three-model ensemble.
+
+    XGBoost is deliberately NOT optional.
     """
 
-    if hasattr(model, "predict_proba"):
-        probabilities = model.predict_proba(X)
+    rf_model = RandomForestClassifier(
+        n_estimators=100,
+        random_state=42,
+        class_weight="balanced",
+        n_jobs=-1,
+    )
 
-        if probabilities.ndim == 2 and probabilities.shape[1] >= 2:
-            return probabilities[:, 1]
+    xgb_model = XGBClassifier(
+        n_estimators=100,
+        max_depth=4,
+        learning_rate=0.05,
+        subsample=0.9,
+        colsample_bytree=0.9,
+        objective="binary:logistic",
+        eval_metric="logloss",
+        random_state=42,
+        n_jobs=-1,
+    )
 
-        return probabilities.ravel()
+    logistic_model = LogisticRegression(
+        max_iter=1000,
+        class_weight="balanced",
+        random_state=42,
+    )
 
-    if hasattr(model, "decision_function"):
-        scores = model.decision_function(X)
+    models = {
+        "Random Forest": rf_model,
+        "XGBoost": xgb_model,
+        "Logistic Regression": logistic_model,
+    }
 
-        return 1.0 / (
-            1.0 + np.exp(-np.asarray(scores))
+    if set(models.keys()) != EXPECTED_MODELS:
+        raise RuntimeError(
+            "SafeTriage-GDM requires exactly three models: "
+            "Random Forest, XGBoost, and Logistic Regression."
         )
 
-    raise RuntimeError(
-        f"Model {type(model).__name__} does not expose "
-        "predict_proba or decision_function."
-    )
+    return models
 
 
-# ==============================================================================
-# ENTROPY / UNCERTAINTY
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# MODEL PROBABILITY
+# ------------------------------------------------------------------------------
 
-def binary_entropy(probabilities):
+def get_probability_from_model(
+    model,
+    X: np.ndarray,
+) -> np.ndarray:
+    """Return P(GDM=1)."""
+
+    probabilities = model.predict_proba(X)
+
+    if probabilities.ndim != 2 or probabilities.shape[1] < 2:
+        raise RuntimeError(
+            "A binary probability output was expected."
+        )
+
+    return probabilities[:, 1].astype(float)
+
+
+def ensemble_probabilities(
+    calibrated_models: Dict[str, object],
+    X: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Binary Shannon entropy in nats.
-    """
-
-    p = np.clip(
-        np.asarray(probabilities, dtype=float),
-        1e-12,
-        1.0 - 1e-12,
-    )
-
-    return -(
-        p * np.log(p)
-        + (1.0 - p) * np.log(1.0 - p)
-    )
-
-
-def calculate_uncertainty_decomposition(model_probabilities):
-    """
-    Estimate uncertainty from the three-model probabilistic ensemble.
-
-    Inputs:
-        model_probabilities:
-            shape = (3, n_samples)
+    Produce probabilities for all three models and their mean.
 
     Returns:
-        ensemble_probability
-        predictive_entropy
-        aleatoric_uncertainty
-        epistemic_uncertainty
-        model_disagreement_std
-
-    Definitions:
-
-        Predictive entropy:
-            H(mean p)
-
-        Aleatoric uncertainty estimate:
-            mean(H(p_m))
-
-        Epistemic uncertainty estimate:
-            H(mean p) - mean(H(p_m))
-
-        Model disagreement:
-            standard deviation of model probabilities
-
-    The epistemic quantity is a model-disagreement / mutual-information-
-    style proxy based on the finite three-model ensemble. It should not
-    be interpreted as a complete Bayesian posterior uncertainty estimate.
+        model_probabilities: shape (3, n)
+        consensus_probability: shape (n,)
     """
 
-    probabilities = np.asarray(
+    model_probabilities = []
+
+    for model_name in EXPECTED_MODEL_ORDER:
+
+        if model_name not in calibrated_models:
+            raise RuntimeError(
+                f"Required model '{model_name}' is missing."
+            )
+
+        probability = get_probability_from_model(
+            calibrated_models[model_name],
+            X,
+        )
+
+        model_probabilities.append(probability)
+
+    model_probabilities = np.vstack(
+        model_probabilities
+    )
+
+    if model_probabilities.shape[0] != 3:
+        raise RuntimeError(
+            "SafeTriage-GDM requires exactly three ensemble "
+            "probability streams."
+        )
+
+    consensus_probability = np.mean(
+        model_probabilities,
+        axis=0,
+    )
+
+    return (
+        model_probabilities,
+        consensus_probability,
+    )
+
+
+# ------------------------------------------------------------------------------
+# UNCERTAINTY
+# ------------------------------------------------------------------------------
+
+def calculate_uncertainty(
+    model_probabilities: np.ndarray,
+    consensus_probability: np.ndarray,
+) -> Dict[str, np.ndarray]:
+    """
+    Estimate uncertainty components.
+
+    Epistemic uncertainty:
+        Model disagreement, represented primarily by the standard
+        deviation of the three model probabilities.
+
+    Aleatoric uncertainty:
+        Expected Bernoulli entropy across the three models.
+
+    Predictive entropy:
+        Entropy of the ensemble predictive probability.
+
+    Mutual information:
+        Predictive entropy - expected entropy.
+        This is a useful epistemic-uncertainty measure for an
+        ensemble of probabilistic predictors.
+    """
+
+    model_probabilities = np.asarray(
         model_probabilities,
         dtype=float,
     )
 
-    if probabilities.ndim != 2:
-        raise ValueError(
-            "Model probability matrix must be two-dimensional."
-        )
+    consensus_probability = np.asarray(
+        consensus_probability,
+        dtype=float,
+    )
 
-    if probabilities.shape[0] != 3:
-        raise RuntimeError(
-            "SafeTriage-GDM uncertainty decomposition requires exactly "
-            "three model probability vectors."
-        )
+    epistemic_std = np.std(
+        model_probabilities,
+        axis=0,
+        ddof=0,
+    )
 
-    ensemble_probability = np.mean(
-        probabilities,
+    model_entropies = binary_entropy(
+        model_probabilities
+    )
+
+    aleatoric_entropy = np.mean(
+        model_entropies,
         axis=0,
     )
 
     predictive_entropy = binary_entropy(
-        ensemble_probability
+        consensus_probability
     )
 
-    individual_entropies = binary_entropy(
-        probabilities
-    )
-
-    aleatoric_uncertainty = np.mean(
-        individual_entropies,
-        axis=0,
-    )
-
-    epistemic_uncertainty = np.maximum(
-        predictive_entropy - aleatoric_uncertainty,
+    mutual_information = np.maximum(
+        predictive_entropy - aleatoric_entropy,
         0.0,
     )
 
-    model_disagreement_std = np.std(
-        probabilities,
-        axis=0,
-    )
-
     return {
-        "ensemble_probability": ensemble_probability,
+        "epistemic_std": epistemic_std,
+        "aleatoric_entropy": aleatoric_entropy,
         "predictive_entropy": predictive_entropy,
-        "aleatoric_uncertainty": aleatoric_uncertainty,
-        "epistemic_uncertainty": epistemic_uncertainty,
-        "model_disagreement_std": model_disagreement_std,
+        "mutual_information": mutual_information,
     }
 
 
-# ==============================================================================
+# ------------------------------------------------------------------------------
 # CONFORMAL PREDICTION
-# ==============================================================================
+# ------------------------------------------------------------------------------
 
-def calculate_conformal_quantile(
-    calibration_probabilities,
-    calibration_labels,
-    alpha=CONFORMAL_ALPHA,
-):
+def calculate_conformal_threshold(
+    y_cal: np.ndarray,
+    calibration_probability: np.ndarray,
+    confidence_level: float = CONFORMAL_LEVEL,
+) -> float:
     """
-    Calculate the split-conformal quantile using calibration data only.
+    Split-conformal threshold based on calibration nonconformity:
 
-    Nonconformity score:
+        score_i = 1 - P(correct class | x_i)
 
-        1 - probability assigned to the true class
+    The finite-sample quantile uses the standard conformal
+    quantile-index correction.
     """
 
-    probabilities = np.asarray(
-        calibration_probabilities,
+    y_cal = np.asarray(y_cal).astype(int)
+    calibration_probability = np.asarray(
+        calibration_probability,
         dtype=float,
     )
 
-    labels = np.asarray(
-        calibration_labels,
-        dtype=int,
+    correct_class_probability = np.where(
+        y_cal == 1,
+        calibration_probability,
+        1.0 - calibration_probability,
     )
 
-    true_class_probability = np.where(
-        labels == 1,
-        probabilities,
-        1.0 - probabilities,
+    scores = 1.0 - correct_class_probability
+
+    scores = scores[np.isfinite(scores)]
+
+    if len(scores) == 0:
+        raise RuntimeError(
+            "Unable to calculate conformal threshold: "
+            "no valid calibration scores."
+        )
+
+    n = len(scores)
+
+    quantile_level = min(
+        1.0,
+        np.ceil(
+            (n + 1) * confidence_level
+        ) / n,
     )
 
-    nonconformity_scores = (
-        1.0 - true_class_probability
-    )
-
-    try:
-        q_threshold = np.quantile(
-            nonconformity_scores,
-            1.0 - alpha,
+    q_threshold = float(
+        np.quantile(
+            scores,
+            quantile_level,
             method="higher",
         )
-    except TypeError:
-        q_threshold = np.percentile(
-            nonconformity_scores,
-            100.0 * (1.0 - alpha),
-        )
+    )
 
-    return float(q_threshold)
+    return float(
+        np.clip(q_threshold, 0.0, 1.0)
+    )
 
 
-def generate_conformal_sets(
-    probabilities,
-    q_threshold,
-):
+def conformal_prediction_sets(
+    probability: np.ndarray,
+    q_threshold: float,
+) -> List[str]:
     """
-    Generate binary conformal prediction sets.
+    Construct binary conformal prediction sets.
 
-    A class is included when its nonconformity score is <= q.
+    Class 0 is included when:
+        1 - P(class 0) <= q
 
-    Output examples:
+    Class 1 is included when:
+        1 - P(class 1) <= q
+
+    Possible sets:
         {Healthy}
         {GDM High Risk}
         {Healthy, GDM High Risk}
     """
 
-    probabilities = np.asarray(
-        probabilities,
+    probability = np.asarray(
+        probability,
         dtype=float,
     )
 
-    healthy_score = 1.0 - probabilities
-    gdm_score = probabilities
+    sets = []
 
-    include_healthy = (
-        healthy_score <= q_threshold
-    )
+    for p in probability:
 
-    include_gdm = (
-        gdm_score <= q_threshold
-    )
+        include_healthy = (
+            1.0 - p
+        ) <= q_threshold
 
-    prediction_sets = []
+        include_gdm = (
+            p
+        ) <= q_threshold
 
-    for healthy, gdm in zip(
-        include_healthy,
-        include_gdm,
-    ):
-        if healthy and gdm:
-            prediction_sets.append(
-                "Healthy + GDM High Risk"
-            )
-        elif healthy:
-            prediction_sets.append(
-                "Healthy"
-            )
-        elif gdm:
-            prediction_sets.append(
-                "GDM High Risk"
-            )
+        if include_healthy and include_gdm:
+            label = "Healthy + GDM High Risk"
+        elif include_healthy:
+            label = "Healthy"
+        elif include_gdm:
+            label = "GDM High Risk"
         else:
-            # For a binary prediction problem this means both classes
-            # are excluded under the selected threshold. We expose both
-            # classes rather than presenting an empty safety set.
-            prediction_sets.append(
-                "Healthy + GDM High Risk"
-            )
+            label = "Healthy + GDM High Risk"
 
-    return np.asarray(
-        prediction_sets,
-        dtype=object,
-    )
+        sets.append(label)
+
+    return sets
 
 
 def conformal_coverage(
-    probabilities,
-    labels,
-    q_threshold,
-):
+    y_true: np.ndarray,
+    probability: np.ndarray,
+    q_threshold: float,
+) -> float:
     """
-    Empirical coverage on a labeled dataset.
+    Empirical coverage of conformal prediction sets.
     """
 
-    probabilities = np.asarray(
-        probabilities,
+    y_true = np.asarray(y_true).astype(int)
+    probability = np.asarray(probability, dtype=float)
+
+    include_healthy = (
+        1.0 - probability
+    ) <= q_threshold
+
+    include_gdm = (
+        probability
+    ) <= q_threshold
+
+    covered = np.where(
+        y_true == 0,
+        include_healthy,
+        include_gdm,
+    )
+
+    return float(
+        np.mean(covered)
+    )
+
+
+# ------------------------------------------------------------------------------
+# PERFORMANCE METRICS
+# ------------------------------------------------------------------------------
+
+def calculate_performance_metrics(
+    y_true: np.ndarray,
+    probability: np.ndarray,
+    threshold: float = RISK_THRESHOLD,
+) -> Dict:
+    """
+    Calculate predictive performance on a labeled dataset.
+    """
+
+    y_true = np.asarray(y_true).astype(int)
+    probability = np.asarray(
+        probability,
         dtype=float,
     )
 
-    labels = np.asarray(
-        labels,
-        dtype=int,
+    prediction = (
+        probability >= threshold
+    ).astype(int)
+
+    cm = confusion_matrix(
+        y_true,
+        prediction,
+        labels=[0, 1],
     )
 
-    healthy_score = 1.0 - probabilities
-    gdm_score = probabilities
+    tn, fp, fn, tp = cm.ravel()
 
-    true_class_score = np.where(
-        labels == 1,
-        gdm_score,
-        healthy_score,
+    sensitivity = (
+        tp / (tp + fn)
+        if (tp + fn) > 0
+        else np.nan
     )
 
-    coverage = np.mean(
-        true_class_score <= q_threshold
+    specificity = (
+        tn / (tn + fp)
+        if (tn + fp) > 0
+        else np.nan
     )
 
-    return float(coverage)
+    metrics = {
+        "ROC-AUC": np.nan,
+        "PR-AUC": np.nan,
+        "Brier Score": np.nan,
+        "Log Loss": np.nan,
+        "Accuracy": np.nan,
+        "Precision": np.nan,
+        "Sensitivity": sensitivity,
+        "Recall": sensitivity,
+        "Specificity": specificity,
+        "F1 Score": np.nan,
+        "True Negatives": int(tn),
+        "False Positives": int(fp),
+        "False Negatives": int(fn),
+        "True Positives": int(tp),
+        "N": len(y_true),
+    }
 
+    if len(np.unique(y_true)) == 2:
 
-# ==============================================================================
-# BMI DRIFT / PSI
-# ==============================================================================
+        metrics["ROC-AUC"] = roc_auc_score(
+            y_true,
+            probability,
+        )
 
-BMI_BINS = [
-    -np.inf,
-    18.5,
-    24.9,
-    29.9,
-    39.9,
-    np.inf,
-]
+        metrics["PR-AUC"] = average_precision_score(
+            y_true,
+            probability,
+        )
 
-
-def calculate_bmi_distribution(bmi_series):
-    """
-    Calculate normalized BMI-bin distribution.
-    """
-
-    numeric_bmi = pd.to_numeric(
-        bmi_series,
-        errors="coerce",
+    metrics["Brier Score"] = brier_score_loss(
+        y_true,
+        probability,
     )
 
-    valid_bmi = numeric_bmi.dropna()
-
-    if len(valid_bmi) == 0:
-        return None
-
-    counts = pd.cut(
-        valid_bmi,
-        bins=BMI_BINS,
-        include_lowest=True,
-    ).value_counts(
-        sort=False
+    clipped_probability = np.clip(
+        probability,
+        1e-7,
+        1 - 1e-7,
     )
 
-    probabilities = (
-        counts / counts.sum()
-    ).astype(float)
-
-    return probabilities.to_numpy()
-
-
-def calculate_psi(
-    expected_distribution,
-    actual_distribution,
-):
-    """
-    Population Stability Index.
-
-    PSI < 0.10   : little/no change
-    PSI 0.10-0.20: moderate change
-    PSI >= 0.20  : substantial shift
-
-    These are monitoring heuristics, not clinical thresholds.
-    """
-
-    if (
-        expected_distribution is None
-        or actual_distribution is None
-    ):
-        return np.nan
-
-    expected = np.asarray(
-        expected_distribution,
-        dtype=float,
+    metrics["Log Loss"] = log_loss(
+        y_true,
+        clipped_probability,
+        labels=[0, 1],
     )
 
-    actual = np.asarray(
-        actual_distribution,
-        dtype=float,
+    metrics["Accuracy"] = accuracy_score(
+        y_true,
+        prediction,
     )
 
-    if expected.shape != actual.shape:
-        return np.nan
-
-    epsilon = 1e-6
-
-    expected = np.clip(
-        expected,
-        epsilon,
-        None,
+    metrics["Precision"] = precision_score(
+        y_true,
+        prediction,
+        zero_division=0,
     )
 
-    actual = np.clip(
-        actual,
-        epsilon,
-        None,
+    metrics["F1 Score"] = f1_score(
+        y_true,
+        prediction,
+        zero_division=0,
     )
 
-    expected = expected / expected.sum()
-    actual = actual / actual.sum()
-
-    psi = np.sum(
-        (actual - expected)
-        * np.log(actual / expected)
-    )
-
-    return float(psi)
+    return metrics
 
 
-# ==============================================================================
+# ------------------------------------------------------------------------------
 # FAIRNESS
-# ==============================================================================
+# ------------------------------------------------------------------------------
 
 def calculate_fairness_metrics(
-    dataframe,
-    consensus_prob,
-):
+    dataframe: pd.DataFrame,
+    consensus_probability: np.ndarray,
+) -> Dict:
     """
-    Fairness metrics use predictions aligned to the entire uploaded
-    inference population.
+    Fairness analysis.
 
     Demographic parity:
-        all rows with valid age.
+        computed on all inference rows having valid age.
 
     FPR disparity:
-        only rows with both valid age and valid GDM ground truth.
+        computed only on rows with both valid age and valid ground truth.
 
-    FPR disparity is NOT full equalized-odds disparity.
+    This avoids the previous 970-row vs 666-prediction mask mismatch.
     """
 
     result = {
@@ -696,35 +842,35 @@ def calculate_fairness_metrics(
         "older_fpr": np.nan,
         "fpr_disparity": np.nan,
         "fairness_sample_size": 0,
-        "younger_sample_size": 0,
-        "older_sample_size": 0,
     }
 
     if dataframe is None:
         return result
 
-    probabilities = np.asarray(
-        consensus_prob,
+    probability = np.asarray(
+        consensus_probability,
         dtype=float,
     )
 
-    if len(dataframe) != len(probabilities):
+    if len(dataframe) != len(probability):
         raise ValueError(
             "Fairness calculation alignment error: "
             f"dataframe contains {len(dataframe)} rows, "
-            f"but predictions contain {len(probabilities)} rows."
+            f"but predictions contain {len(probability)} rows."
         )
 
-    if AGE_COLUMN not in dataframe.columns:
+    age_col = detect_age_column(dataframe)
+
+    if age_col is None:
         return result
 
     age_series = pd.to_numeric(
-        dataframe[AGE_COLUMN],
+        dataframe[age_col],
         errors="coerce",
     )
 
     positive_flags = (
-        probabilities >= RISK_THRESHOLD
+        probability >= RISK_THRESHOLD
     ).astype(int)
 
     younger_mask = (
@@ -736,14 +882,6 @@ def calculate_fairness_metrics(
         (age_series >= 35)
         & age_series.notna()
     ).to_numpy()
-
-    result["younger_sample_size"] = int(
-        younger_mask.sum()
-    )
-
-    result["older_sample_size"] = int(
-        older_mask.sum()
-    )
 
     if younger_mask.sum() > 0:
         result["younger_positive_rate"] = float(
@@ -767,17 +905,22 @@ def calculate_fairness_metrics(
             result["older_positive_rate"]
         )
     ):
-        result["demographic_parity_difference"] = abs(
+        result[
+            "demographic_parity_difference"
+        ] = abs(
             result["younger_positive_rate"]
             - result["older_positive_rate"]
         )
 
-    if TARGET_COLUMN not in dataframe.columns:
+    target_col = detect_target_column(
+        dataframe
+    )
+
+    if target_col is None:
         return result
 
-    y_true = pd.to_numeric(
-        dataframe[TARGET_COLUMN],
-        errors="coerce",
+    y_true = normalize_binary_target(
+        dataframe[target_col]
     )
 
     labeled_mask = (
@@ -798,7 +941,7 @@ def calculate_fairness_metrics(
 
     eval_y_true = y_true.to_numpy()[
         labeled_mask
-    ]
+    ].astype(int)
 
     eval_age = age_series.to_numpy()[
         labeled_mask
@@ -808,18 +951,16 @@ def calculate_fairness_metrics(
     older_eval = eval_age >= 35
 
     def calculate_fpr(
-        y_true_group,
-        y_pred_group,
+        group_y_true,
+        group_y_pred,
     ):
-        negatives = (
-            y_true_group == 0
-        )
+        negatives = group_y_true == 0
 
         if negatives.sum() == 0:
             return np.nan
 
         false_positives = np.sum(
-            y_pred_group[negatives] == 1
+            group_y_pred[negatives] == 1
         )
 
         return float(
@@ -851,525 +992,427 @@ def calculate_fairness_metrics(
     return result
 
 
-# ==============================================================================
-# PERFORMANCE METRICS
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# BMI DRIFT / PSI
+# ------------------------------------------------------------------------------
 
-def calculate_binary_metrics(
-    y_true,
-    probabilities,
-    threshold=RISK_THRESHOLD,
-):
-    """
-    Calculate predictive performance metrics.
-    """
+BMI_BINS = [
+    -np.inf,
+    18.5,
+    24.9,
+    29.9,
+    39.9,
+    np.inf,
+]
 
-    y_true = np.asarray(
-        y_true,
-        dtype=int,
+BMI_LABELS = [
+    "Underweight",
+    "Normal",
+    "Overweight",
+    "Obesity I",
+    "Obesity II+",
+]
+
+
+def bmi_distribution(
+    dataframe: pd.DataFrame,
+) -> Optional[Dict[str, float]]:
+    """Calculate BMI-bin distribution."""
+
+    bmi_candidates = [
+        "BMI",
+        "bmi",
+        "Body Mass Index",
+        "body mass index",
+    ]
+
+    bmi_col = None
+
+    for column in bmi_candidates:
+        if column in dataframe.columns:
+            bmi_col = column
+            break
+
+    if bmi_col is None:
+        return None
+
+    bmi = pd.to_numeric(
+        dataframe[bmi_col],
+        errors="coerce",
     )
 
-    probabilities = np.asarray(
-        probabilities,
-        dtype=float,
+    valid = bmi.dropna()
+
+    if len(valid) == 0:
+        return None
+
+    categories = pd.cut(
+        valid,
+        bins=BMI_BINS,
+        labels=BMI_LABELS,
+        include_lowest=True,
     )
 
-    predictions = (
-        probabilities >= threshold
-    ).astype(int)
-
-    cm = confusion_matrix(
-        y_true,
-        predictions,
-        labels=[0, 1],
+    counts = (
+        categories.value_counts(
+            sort=False
+        )
     )
 
-    tn, fp, fn, tp = cm.ravel()
-
-    sensitivity = (
-        tp / (tp + fn)
-        if (tp + fn) > 0
-        else np.nan
+    proportions = (
+        counts / counts.sum()
     )
 
-    specificity = (
-        tn / (tn + fp)
-        if (tn + fp) > 0
-        else np.nan
-    )
-
-    metrics = {
-        "ROC-AUC": (
-            float(
-                roc_auc_score(
-                    y_true,
-                    probabilities,
-                )
-            )
-            if len(np.unique(y_true)) == 2
-            else np.nan
-        ),
-        "PR-AUC": (
-            float(
-                average_precision_score(
-                    y_true,
-                    probabilities,
-                )
-            )
-            if len(np.unique(y_true)) == 2
-            else np.nan
-        ),
-        "Accuracy": float(
-            accuracy_score(
-                y_true,
-                predictions,
-            )
-        ),
-        "Sensitivity": float(
-            sensitivity
-        ),
-        "Specificity": float(
-            specificity
-        ),
-        "Precision": float(
-            precision_score(
-                y_true,
-                predictions,
-                zero_division=0,
-            )
-        ),
-        "F1-score": float(
-            f1_score(
-                y_true,
-                predictions,
-                zero_division=0,
-            )
-        ),
-        "Brier Score": float(
-            brier_score_loss(
-                y_true,
-                probabilities,
-            )
-        ),
-        "Log Loss": float(
-            log_loss(
-                y_true,
-                probabilities,
-                labels=[0, 1],
-            )
-        ),
-        "Confusion Matrix": cm,
+    return {
+        str(label): float(
+            proportions.get(label, 0.0)
+        )
+        for label in BMI_LABELS
     }
 
-    return metrics
 
+def population_stability_index(
+    baseline: Dict[str, float],
+    current: Dict[str, float],
+) -> float:
+    """Calculate PSI."""
 
-# ==============================================================================
-# XAI
-# ==============================================================================
+    epsilon = 1e-6
 
-def calculate_feature_importance(
-    models,
-    feature_schema,
-):
-    """
-    Build a unified global feature-attribution table across all three
-    ensemble models.
-
-    Tree-based importance:
-        RF feature_importances_
-        XGBoost feature_importances_
-
-    Logistic Regression:
-        absolute standardized coefficient magnitude
-
-    Each model's contribution is normalized independently before the
-    three-model average is calculated.
-    """
-
-    feature_count = len(
-        feature_schema
+    categories = sorted(
+        set(baseline.keys())
+        | set(current.keys())
     )
 
-    per_model = {}
+    psi = 0.0
 
-    for model_name, model in models.items():
+    for category in categories:
 
-        estimator = model
-
-        if hasattr(
-            model,
-            "estimator",
-        ):
-            estimator = model.estimator
-
-        if hasattr(
-            estimator,
-            "feature_importances_",
-        ):
-            values = np.asarray(
-                estimator.feature_importances_,
-                dtype=float,
-            )
-
-        elif hasattr(
-            estimator,
-            "coef_",
-        ):
-            coefficients = np.asarray(
-                estimator.coef_,
-                dtype=float,
-            )
-
-            if coefficients.ndim == 2:
-                values = np.abs(
-                    coefficients[0]
-                )
-            else:
-                values = np.abs(
-                    coefficients
-                )
-
-        else:
-            continue
-
-        if len(values) != feature_count:
-            continue
-
-        total = values.sum()
-
-        if total > 0:
-            values = values / total
-
-        per_model[model_name] = values
-
-    if not per_model:
-        return pd.DataFrame(
-            columns=[
-                "Feature",
-                "Attribution Weight Score",
-            ]
+        expected = max(
+            baseline.get(category, 0.0),
+            epsilon,
         )
 
-    model_arrays = list(
-        per_model.values()
-    )
+        actual = max(
+            current.get(category, 0.0),
+            epsilon,
+        )
 
-    average_importance = np.mean(
-        np.vstack(model_arrays),
-        axis=0,
-    )
+        psi += (
+            actual - expected
+        ) * np.log(
+            actual / expected
+        )
 
-    result = pd.DataFrame(
-        {
-            "Feature": feature_schema,
-            "Attribution Weight Score": average_importance,
-        }
-    )
+    return float(psi)
 
-    result = result.sort_values(
+
+# ------------------------------------------------------------------------------
+# XAI
+# ------------------------------------------------------------------------------
+
+def calculate_feature_importance(
+    models: Dict[str, object],
+    feature_schema: List[str],
+) -> pd.DataFrame:
+    """
+    Global feature attribution summary.
+
+    RF and XGBoost provide tree-based feature importances.
+    Logistic Regression provides coefficients.
+
+    The final table reports each component separately and an
+    aggregate normalized attribution score.
+    """
+
+    rows = []
+
+    for index, feature in enumerate(
+        feature_schema
+    ):
+
+        rf_importance = 0.0
+        xgb_importance = 0.0
+        logistic_abs = 0.0
+
+        rf_model = models.get(
+            "Random Forest"
+        )
+
+        xgb_model = models.get(
+            "XGBoost"
+        )
+
+        lr_model = models.get(
+            "Logistic Regression"
+        )
+
+        if rf_model is not None:
+            try:
+                base_rf = (
+                    rf_model
+                    .estimator
+                    if hasattr(
+                        rf_model,
+                        "estimator",
+                    )
+                    else rf_model
+                )
+
+                if hasattr(
+                    base_rf,
+                    "feature_importances_",
+                ):
+                    rf_importance = float(
+                        base_rf.feature_importances_[
+                            index
+                        ]
+                    )
+            except Exception:
+                rf_importance = 0.0
+
+        if xgb_model is not None:
+            try:
+                base_xgb = (
+                    xgb_model
+                    .estimator
+                    if hasattr(
+                        xgb_model,
+                        "estimator",
+                    )
+                    else xgb_model
+                )
+
+                if hasattr(
+                    base_xgb,
+                    "feature_importances_",
+                ):
+                    xgb_importance = float(
+                        base_xgb.feature_importances_[
+                            index
+                        ]
+                    )
+            except Exception:
+                xgb_importance = 0.0
+
+        if lr_model is not None:
+            try:
+                if hasattr(
+                    lr_model,
+                    "estimator",
+                ):
+                    base_lr = lr_model.estimator
+                else:
+                    base_lr = lr_model
+
+                if hasattr(
+                    base_lr,
+                    "coef_",
+                ):
+                    logistic_abs = abs(
+                        float(
+                            base_lr.coef_[0][
+                                index
+                            ]
+                        )
+                    )
+            except Exception:
+                logistic_abs = 0.0
+
+        rows.append(
+            {
+                "Feature": feature,
+                "Random Forest": rf_importance,
+                "XGBoost": xgb_importance,
+                "Logistic Regression |Abs Coefficient|":
+                    logistic_abs,
+            }
+        )
+
+    xai_df = pd.DataFrame(rows)
+
+    if xai_df.empty:
+        return xai_df
+
+    for column in [
+        "Random Forest",
+        "XGBoost",
+        "Logistic Regression |Abs Coefficient|",
+    ]:
+        total = xai_df[column].sum()
+
+        if total > 0:
+            xai_df[
+                f"{column} Normalized"
+            ] = (
+                xai_df[column] / total
+            )
+        else:
+            xai_df[
+                f"{column} Normalized"
+            ] = 0.0
+
+    xai_df[
+        "Attribution Weight Score"
+    ] = (
+        xai_df[
+            "Random Forest Normalized"
+        ]
+        + xai_df[
+            "XGBoost Normalized"
+        ]
+        + xai_df[
+            "Logistic Regression |Abs Coefficient| Normalized"
+        ]
+    ) / 3.0
+
+    return xai_df.sort_values(
         "Attribution Weight Score",
         ascending=False,
     ).reset_index(drop=True)
 
-    return result
 
-
-# ==============================================================================
-# MODEL CONSTRUCTION
-# ==============================================================================
-
-def build_models():
-    """
-    Construct the mandatory three-model ensemble.
-
-    XGBoost is intentionally mandatory.
-    There is NO two-model fallback.
-    """
-
-    rf_model = RandomForestClassifier(
-        n_estimators=100,
-        random_state=RANDOM_STATE,
-        class_weight="balanced",
-        n_jobs=-1,
-    )
-
-    logistic_model = LogisticRegression(
-        max_iter=1000,
-        class_weight="balanced",
-        random_state=RANDOM_STATE,
-    )
-
-    xgb_model = XGBClassifier(
-        n_estimators=100,
-        max_depth=4,
-        learning_rate=0.05,
-        subsample=0.9,
-        colsample_bytree=0.9,
-        objective="binary:logistic",
-        eval_metric="logloss",
-        random_state=RANDOM_STATE,
-        n_jobs=-1,
-    )
-
-    models = {
-        "Random Forest": rf_model,
-        "XGBoost": xgb_model,
-        "Logistic Regression": logistic_model,
-    }
-
-    if set(models.keys()) != EXPECTED_MODELS:
-        raise RuntimeError(
-            "SafeTriage-GDM requires exactly three models: "
-            "Random Forest, XGBoost, and Logistic Regression."
-        )
-
-    return models
-
-
-# ==============================================================================
-# MODEL CALIBRATION
-# ==============================================================================
-
-def calibrate_models(
-    models,
-    X_cal,
-    y_cal,
-):
-    """
-    Calibrate each already-trained base model using the dedicated
-    calibration set.
-
-    FrozenEstimator is used with modern scikit-learn versions to make
-    the prefit nature of the model explicit.
-    """
-
-    calibrated_models = {}
-
-    for model_name, model in models.items():
-
-        calibrated_model = CalibratedClassifierCV(
-            FrozenEstimator(model),
-            method="sigmoid",
-        )
-
-        calibrated_model.fit(
-            X_cal,
-            y_cal,
-        )
-
-        calibrated_models[
-            model_name
-        ] = calibrated_model
-
-    if (
-        set(calibrated_models.keys())
-        != EXPECTED_MODELS
-    ):
-        raise RuntimeError(
-            "Calibration did not produce the required three-model ensemble."
-        )
-
-    return calibrated_models
-
-
-# ==============================================================================
-# PREDICTION MATRIX
-# ==============================================================================
-
-def get_model_probability_matrix(
-    models,
-    X,
-):
-    """
-    Return probability matrix with exactly three rows.
-    """
-
-    probabilities = []
-
-    for model_name in [
-        "Random Forest",
-        "XGBoost",
-        "Logistic Regression",
-    ]:
-
-        if model_name not in models:
-            raise RuntimeError(
-                f"Required ensemble model missing: {model_name}"
-            )
-
-        probability = get_probability_from_model(
-            models[model_name],
-            X,
-        )
-
-        probabilities.append(
-            np.asarray(
-                probability,
-                dtype=float,
-            )
-        )
-
-    matrix = np.vstack(
-        probabilities
-    )
-
-    if matrix.shape[0] != 3:
-        raise RuntimeError(
-            "SafeTriage-GDM requires exactly three ensemble probability vectors."
-        )
-
-    return matrix
-
-
-# ==============================================================================
-# TRAINING PIPELINE
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# TRAINING
+# ------------------------------------------------------------------------------
 
 def train_pipeline(
-    raw_dataframe,
-):
+    raw_dataframe: pd.DataFrame,
+) -> Dict:
     """
-    Complete training pipeline.
+    Train the complete SafeTriage-GDM pipeline.
 
-    Population separation:
-
-        ALL uploaded rows
-            -> inference
-
-        ONLY rows with valid GDM outcome
-            -> training / calibration / test
-
-    Split:
-
+    Data:
         60% training
         15% calibration
         25% untouched test
+
+    No information from calibration/test is used to fit the
+    preprocessing pipeline.
     """
 
-    dataframe = raw_dataframe.copy()
+    target_col = detect_target_column(
+        raw_dataframe
+    )
 
-    if TARGET_COLUMN not in dataframe.columns:
+    if target_col is None:
         raise ValueError(
-            f"Training requires the target column "
-            f"'{TARGET_COLUMN}'."
+            "No GDM outcome column was found. "
+            "A labeled dataset containing valid GDM outcomes "
+            "is required to train the pipeline."
         )
 
-    dataframe[
-        TARGET_COLUMN
-    ] = parse_gdm_target(
-        dataframe[TARGET_COLUMN]
+    working = raw_dataframe.copy()
+
+    working[TARGET_COLUMN] = (
+        normalize_binary_target(
+            working[target_col]
+        )
     )
 
     labeled_mask = (
-        dataframe[TARGET_COLUMN]
-        .notna()
+        working[TARGET_COLUMN].notna()
     )
 
-    labeled_dataframe = dataframe.loc[
+    labeled = working.loc[
         labeled_mask
     ].copy()
 
-    if len(labeled_dataframe) < 20:
+    if len(labeled) < 20:
         raise ValueError(
-            "At least 20 labeled observations are required "
-            "for model training."
+            "Too few labeled observations to train "
+            "the SafeTriage-GDM pipeline."
         )
 
-    y = labeled_dataframe[
+    y = labeled[
         TARGET_COLUMN
     ].astype(int).to_numpy()
 
-    unique_classes = np.unique(y)
-
-    if not np.array_equal(
-        unique_classes,
-        np.array([0, 1]),
-    ):
+    if len(np.unique(y)) != 2:
         raise ValueError(
-            "Training data must contain both GDM classes: "
-            "0 and 1."
+            "The labeled GDM outcome must contain both "
+            "classes: 0 and 1."
         )
 
-    X_raw = labeled_dataframe.drop(
+    X_raw = labeled.drop(
         columns=[
             TARGET_COLUMN,
+            target_col,
             ID_COLUMN,
         ],
         errors="ignore",
-    ).copy()
-
-    # --------------------------------------------------------------------------
-    # Encode
-    # --------------------------------------------------------------------------
-
-    X_encoded = encode_dataframe(
-        X_raw
     )
 
-    feature_schema = list(
-        X_encoded.columns
-    )
+    # --------------------------------------------------------------------------
+    # 60 / 15 / 25 SPLIT
+    # --------------------------------------------------------------------------
 
-    if len(feature_schema) == 0:
-        raise ValueError(
-            "No usable predictor features remain after removing "
-            "the target and ID columns."
+    X_train_temp, X_test, y_train_temp, y_test = (
+        train_test_split(
+            X_raw,
+            y,
+            test_size=0.25,
+            random_state=42,
+            stratify=y,
         )
-
-    # --------------------------------------------------------------------------
-    # 60 / 15 / 25 split
-    # --------------------------------------------------------------------------
-
-    (
-        X_train_temp,
-        X_test,
-        y_train_temp,
-        y_test,
-    ) = train_test_split(
-        X_encoded,
-        y,
-        test_size=0.25,
-        random_state=RANDOM_STATE,
-        stratify=y,
     )
 
-    (
-        X_train,
-        X_cal,
-        y_train,
-        y_cal,
-    ) = train_test_split(
-        X_train_temp,
-        y_train_temp,
-        test_size=0.25,
-        random_state=RANDOM_STATE,
-        stratify=y_train_temp,
+    X_train, X_cal, y_train, y_cal = (
+        train_test_split(
+            X_train_temp,
+            y_train_temp,
+            test_size=0.25,
+            random_state=42,
+            stratify=y_train_temp,
+        )
     )
 
     # --------------------------------------------------------------------------
-    # Imputation: TRAIN ONLY
+    # ENCODING
     # --------------------------------------------------------------------------
 
-    imputer = IterativeImputer(
-        random_state=RANDOM_STATE,
-        max_iter=10,
-    )
-
-    X_train_imputed = imputer.fit_transform(
+    X_train_encoded = encode_dataframe(
         X_train
     )
 
-    X_cal_imputed = imputer.transform(
-        X_cal
+    feature_schema = list(
+        X_train_encoded.columns
     )
 
-    X_test_imputed = imputer.transform(
-        X_test
+    X_cal_encoded = align_to_schema(
+        encode_dataframe(X_cal),
+        feature_schema,
+    )
+
+    X_test_encoded = align_to_schema(
+        encode_dataframe(X_test),
+        feature_schema,
     )
 
     # --------------------------------------------------------------------------
-    # Scaling: TRAIN ONLY
+    # IMPUTATION
+    # --------------------------------------------------------------------------
+
+    imputer = IterativeImputer(
+        random_state=42,
+        max_iter=10,
+        initial_strategy="median",
+    )
+
+    X_train_imputed = imputer.fit_transform(
+        X_train_encoded
+    )
+
+    X_cal_imputed = imputer.transform(
+        X_cal_encoded
+    )
+
+    X_test_imputed = imputer.transform(
+        X_test_encoded
+    )
+
+    # --------------------------------------------------------------------------
+    # SCALING
     # --------------------------------------------------------------------------
 
     scaler = StandardScaler()
@@ -1387,27 +1430,29 @@ def train_pipeline(
     )
 
     # --------------------------------------------------------------------------
-    # SMOTETomek: TRAIN ONLY
+    # SMOTETOMEK ONLY ON TRAINING DATA
     # --------------------------------------------------------------------------
 
-    sampler = SMOTETomek(
-        random_state=RANDOM_STATE
+    smote_tomek = SMOTETomek(
+        random_state=42
     )
 
     X_train_balanced, y_train_balanced = (
-        sampler.fit_resample(
+        smote_tomek.fit_resample(
             X_train_scaled,
             y_train,
         )
     )
 
     # --------------------------------------------------------------------------
-    # Train exactly three base models
+    # THREE REQUIRED MODELS
     # --------------------------------------------------------------------------
 
-    models = build_models()
+    models = create_three_model_ensemble()
 
-    for model_name, model in models.items():
+    for model_name in EXPECTED_MODEL_ORDER:
+
+        model = models[model_name]
 
         model.fit(
             X_train_balanced,
@@ -1415,157 +1460,164 @@ def train_pipeline(
         )
 
     # --------------------------------------------------------------------------
-    # Calibrate exactly three models
+    # CALIBRATION
+    #
+    # The base models are trained only on the training partition.
+    # The calibration partition is then used to fit probability
+    # calibration.
     # --------------------------------------------------------------------------
 
-    calibrated_models = calibrate_models(
-        models,
-        X_cal_scaled,
-        y_cal,
-    )
+    calibrated_models = {}
+
+    for model_name in EXPECTED_MODEL_ORDER:
+
+        model = models[model_name]
+
+        calibrated_model = CalibratedClassifierCV(
+            model,
+            method="sigmoid",
+            cv="prefit",
+        )
+
+        calibrated_model.fit(
+            X_cal_scaled,
+            y_cal,
+        )
+
+        calibrated_models[
+            model_name
+        ] = calibrated_model
 
     # --------------------------------------------------------------------------
-    # Calibration probabilities
+    # CALIBRATION PERFORMANCE
     # --------------------------------------------------------------------------
 
-    calibration_model_probabilities = (
-        get_model_probability_matrix(
+    cal_model_probabilities, cal_probability = (
+        ensemble_probabilities(
             calibrated_models,
             X_cal_scaled,
         )
     )
 
-    calibration_uncertainty = (
-        calculate_uncertainty_decomposition(
-            calibration_model_probabilities
-        )
-    )
-
-    calibration_probabilities = (
-        calibration_uncertainty[
-            "ensemble_probability"
-        ]
-    )
-
     # --------------------------------------------------------------------------
-    # Conformal threshold
+    # TEST PERFORMANCE
     # --------------------------------------------------------------------------
 
-    q_threshold = calculate_conformal_quantile(
-        calibration_probabilities,
-        y_cal,
-        alpha=CONFORMAL_ALPHA,
-    )
-
-    # --------------------------------------------------------------------------
-    # Untouched TEST predictions
-    # --------------------------------------------------------------------------
-
-    test_model_probabilities = (
-        get_model_probability_matrix(
+    test_model_probabilities, test_probability = (
+        ensemble_probabilities(
             calibrated_models,
             X_test_scaled,
         )
     )
 
-    test_uncertainty = (
-        calculate_uncertainty_decomposition(
-            test_model_probabilities
-        )
+    performance = calculate_performance_metrics(
+        y_test,
+        test_probability,
     )
 
-    test_ensemble_probability = (
-        test_uncertainty[
-            "ensemble_probability"
-        ]
-    )
-
-    # --------------------------------------------------------------------------
-    # Test metrics for all three models
-    # --------------------------------------------------------------------------
-
-    test_metrics = {}
-
-    model_order = [
-        "Random Forest",
-        "XGBoost",
-        "Logistic Regression",
-    ]
+    per_model_performance = {}
 
     for index, model_name in enumerate(
-        model_order
+        EXPECTED_MODEL_ORDER
     ):
 
-        test_metrics[
+        per_model_performance[
             model_name
-        ] = calculate_binary_metrics(
+        ] = calculate_performance_metrics(
             y_test,
             test_model_probabilities[index],
         )
 
-    test_metrics[
-        "3-Model Ensemble"
-    ] = calculate_binary_metrics(
-        y_test,
-        test_ensemble_probability,
-    )
-
     # --------------------------------------------------------------------------
-    # Conformal test coverage
+    # ROC DATA
     # --------------------------------------------------------------------------
 
-    test_conformal_coverage = (
-        conformal_coverage(
-            test_ensemble_probability,
+    if len(np.unique(y_test)) == 2:
+
+        fpr, tpr, roc_thresholds = roc_curve(
             y_test,
-            q_threshold,
+            test_probability,
         )
-    )
 
-    test_prediction_sets = (
-        generate_conformal_sets(
-            test_ensemble_probability,
-            q_threshold,
+        precision, recall, pr_thresholds = (
+            precision_recall_curve(
+                y_test,
+                test_probability,
+            )
         )
-    )
 
-    test_set_sizes = np.array(
-        [
-            2
-            if " + " in prediction_set
-            else 1
-            for prediction_set
-            in test_prediction_sets
-        ]
-    )
+    else:
+        fpr = np.array([])
+        tpr = np.array([])
+        roc_thresholds = np.array([])
+        precision = np.array([])
+        recall = np.array([])
+        pr_thresholds = np.array([])
 
     # --------------------------------------------------------------------------
-    # Calibration curve
+    # CALIBRATION CURVE
     # --------------------------------------------------------------------------
 
-    calibration_fraction_pos, calibration_mean_pred = (
-        calibration_curve(
-            y_test,
-            test_ensemble_probability,
-            n_bins=10,
-            strategy="quantile",
+    if len(np.unique(y_test)) == 2:
+
+        calibration_fraction, calibration_mean = (
+            calibration_curve(
+                y_test,
+                test_probability,
+                n_bins=10,
+                strategy="quantile",
+            )
         )
+
+    else:
+        calibration_fraction = np.array([])
+        calibration_mean = np.array([])
+
+    # --------------------------------------------------------------------------
+    # CONFORMAL THRESHOLD
+    # --------------------------------------------------------------------------
+
+    q_threshold = calculate_conformal_threshold(
+        y_cal,
+        cal_probability,
+        CONFORMAL_LEVEL,
     )
 
-    # --------------------------------------------------------------------------
-    # ROC curve
-    # --------------------------------------------------------------------------
+    calibration_coverage = conformal_coverage(
+        y_cal,
+        cal_probability,
+        q_threshold,
+    )
 
-    fpr, tpr, roc_thresholds = roc_curve(
+    test_coverage = conformal_coverage(
         y_test,
-        test_ensemble_probability,
+        test_probability,
+        q_threshold,
     )
 
     # --------------------------------------------------------------------------
-    # Feature importance / XAI
+    # UNCERTAINTY
     # --------------------------------------------------------------------------
 
-    feature_importance_df = (
+    calibration_uncertainty = (
+        calculate_uncertainty(
+            cal_model_probabilities,
+            cal_probability,
+        )
+    )
+
+    test_uncertainty = (
+        calculate_uncertainty(
+            test_model_probabilities,
+            test_probability,
+        )
+    )
+
+    # --------------------------------------------------------------------------
+    # FEATURE IMPORTANCE
+    # --------------------------------------------------------------------------
+
+    feature_importance = (
         calculate_feature_importance(
             calibrated_models,
             feature_schema,
@@ -1573,192 +1625,88 @@ def train_pipeline(
     )
 
     # --------------------------------------------------------------------------
-    # Baseline BMI distribution
-    #
-    # Use the training population only to establish the reference
-    # distribution.
+    # CONFUSION MATRIX
     # --------------------------------------------------------------------------
 
-    baseline_bmi_distribution = None
+    test_predictions = (
+        test_probability >= RISK_THRESHOLD
+    ).astype(int)
 
-    if BMI_COLUMN in labeled_dataframe.columns:
-
-        train_original_indices = (
-            X_train.index
-        )
-
-        baseline_bmi_distribution = (
-            calculate_bmi_distribution(
-                dataframe.loc[
-                    train_original_indices,
-                    BMI_COLUMN,
-                ]
-            )
-        )
+    cm = confusion_matrix(
+        y_test,
+        test_predictions,
+        labels=[0, 1],
+    )
 
     # --------------------------------------------------------------------------
-    # Artifact
+    # BMI BASELINE
+    # --------------------------------------------------------------------------
+
+    baseline_bmi_distribution = (
+        bmi_distribution(
+            raw_dataframe
+        )
+    )
+
+    # --------------------------------------------------------------------------
+    # ARTIFACT
     # --------------------------------------------------------------------------
 
     artifact = {
-        "artifact_version": 2,
-        "app_title": APP_TITLE,
-        "app_version": APP_VERSION,
-
-        "target_column": TARGET_COLUMN,
-        "id_column": ID_COLUMN,
-
+        "artifact_version": "SafeTriage-GDM-2026.10",
+        "architecture": {
+            "models": EXPECTED_MODEL_ORDER,
+            "ensemble": "Unweighted mean of calibrated model probabilities",
+            "training_fraction": 0.60,
+            "calibration_fraction": 0.15,
+            "test_fraction": 0.25,
+            "conformal_level": CONFORMAL_LEVEL,
+            "risk_threshold": RISK_THRESHOLD,
+        },
         "imputer": imputer,
         "scaler": scaler,
-
         "models": calibrated_models,
-
-        "base_models": models,
-
-        "feature_schema": feature_schema,
-
         "q_threshold": q_threshold,
-        "conformal_alpha": CONFORMAL_ALPHA,
-
-        "feature_importance": feature_importance_df,
-
-        "test_metrics": test_metrics,
-
-        "test_conformal_coverage": (
-            test_conformal_coverage
-        ),
-
-        "test_mean_conformal_set_size": (
-            float(
-                np.mean(test_set_sizes)
-            )
-        ),
-
-        "test_singleton_rate": (
-            float(
-                np.mean(test_set_sizes == 1)
-            )
-        ),
-
-        "roc_curve": {
+        "feature_schema": feature_schema,
+        "feature_importance": feature_importance,
+        "performance": performance,
+        "per_model_performance": per_model_performance,
+        "confusion_matrix": cm,
+        "roc_data": {
             "fpr": fpr,
             "tpr": tpr,
             "thresholds": roc_thresholds,
         },
-
-        "calibration_curve": {
-            "fraction_of_positives": (
-                calibration_fraction_pos
-            ),
-            "mean_predicted_value": (
-                calibration_mean_pred
-            ),
+        "pr_data": {
+            "precision": precision,
+            "recall": recall,
+            "thresholds": pr_thresholds,
         },
-
-        "feature_importance": (
-            feature_importance_df
-        ),
-
-        "training_rows": int(
-            len(X_train)
-        ),
-
-        "calibration_rows": int(
-            len(X_cal)
-        ),
-
-        "test_rows": int(
-            len(X_test)
-        ),
-
-        "total_labeled_rows": int(
-            len(labeled_dataframe)
-        ),
-
-        "baseline_bmi_distribution": (
-            baseline_bmi_distribution
-        ),
-
-        "train_positive_rate": float(
-            np.mean(y_train)
-        ),
-
-        "calibration_positive_rate": float(
-            np.mean(y_cal)
-        ),
-
-        "test_positive_rate": float(
-            np.mean(y_test)
-        ),
+        "calibration_data": {
+            "fraction_of_positives":
+                calibration_fraction,
+            "mean_predicted_value":
+                calibration_mean,
+        },
+        "uncertainty_test": test_uncertainty,
+        "uncertainty_calibration":
+            calibration_uncertainty,
+        "conformal": {
+            "calibration_coverage":
+                calibration_coverage,
+            "test_coverage":
+                test_coverage,
+        },
+        "training_rows": len(X_train),
+        "calibration_rows": len(X_cal),
+        "test_rows": len(X_test),
+        "labeled_rows": len(labeled),
+        "baseline_bmi_distribution":
+            baseline_bmi_distribution,
+        "dataset_hash":
+            dataset_hash(raw_dataframe),
     }
 
-    return artifact
-
-
-# ==============================================================================
-# ARTIFACT VALIDATION
-# ==============================================================================
-
-def validate_artifact(artifact):
-    """
-    Verify that the stored artifact belongs to the intended
-    SafeTriage-GDM architecture.
-    """
-
-    required_keys = {
-        "imputer",
-        "scaler",
-        "models",
-        "feature_schema",
-        "q_threshold",
-        "test_metrics",
-    }
-
-    missing_keys = (
-        required_keys
-        - set(artifact.keys())
-    )
-
-    if missing_keys:
-        raise RuntimeError(
-            "The saved SafeTriage-GDM artifact is incomplete. "
-            f"Missing: {sorted(missing_keys)}"
-        )
-
-    model_names = set(
-        artifact["models"].keys()
-    )
-
-    if model_names != EXPECTED_MODELS:
-        raise RuntimeError(
-            "The saved artifact does not contain exactly the required "
-            "three-model ensemble. "
-            f"Found: {sorted(model_names)}; "
-            f"Expected: {sorted(EXPECTED_MODELS)}."
-        )
-
-    if len(
-        artifact["feature_schema"]
-    ) == 0:
-        raise RuntimeError(
-            "The saved artifact contains an empty feature schema."
-        )
-
-    if not np.isfinite(
-        artifact["q_threshold"]
-    ):
-        raise RuntimeError(
-            "The saved conformal q-threshold is invalid."
-        )
-
-    return True
-
-
-# ==============================================================================
-# LOAD / SAVE ARTIFACT
-# ==============================================================================
-
-def save_artifact(artifact):
     with open(
         ARTIFACT_PATH,
         "wb",
@@ -1769,72 +1717,175 @@ def save_artifact(artifact):
             protocol=pickle.HIGHEST_PROTOCOL,
         )
 
-
-def load_artifact():
-    with open(
-        ARTIFACT_PATH,
-        "rb",
-    ) as file:
-        artifact = pickle.load(file)
-
-    validate_artifact(
-        artifact
-    )
-
     return artifact
 
 
-# ==============================================================================
-# FILE LOADING
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# ARTIFACT VALIDATION
+# ------------------------------------------------------------------------------
 
-def load_uploaded_dataframe(uploaded_file):
+def validate_artifact(
+    artifact: Dict,
+) -> bool:
     """
-    Load CSV or Excel input.
+    Strictly validate the saved artifact.
+
+    A legacy or incomplete artifact is rejected rather than
+    silently changing the model architecture.
     """
 
-    filename = (
-        uploaded_file.name.lower()
-    )
-
-    if filename.endswith(
-        ".csv"
+    if not isinstance(
+        artifact,
+        dict,
     ):
-        dataframe = pd.read_csv(
-            uploaded_file
-        )
+        return False
 
-    elif filename.endswith(
-        (".xlsx", ".xls")
+    if "models" not in artifact:
+        return False
+
+    models = artifact["models"]
+
+    if not isinstance(
+        models,
+        dict,
     ):
-        dataframe = pd.read_excel(
-            uploaded_file
-        )
+        return False
 
-    else:
-        raise ValueError(
-            "Unsupported file type. "
-            "Please upload CSV or Excel data."
-        )
+    if set(models.keys()) != EXPECTED_MODELS:
+        return False
 
-    if dataframe.empty:
-        raise ValueError(
-            "The uploaded dataset is empty."
-        )
+    if list(models.keys()) != EXPECTED_MODEL_ORDER:
+        # Dict order should be preserved by the saved artifact.
+        # Reconstructing the dictionary below is safe, but a malformed
+        # artifact should still be rejected.
+        return False
 
-    dataframe = dataframe.copy()
-
-    dataframe.columns = [
-        str(column).strip()
-        for column in dataframe.columns
+    required_keys = [
+        "imputer",
+        "scaler",
+        "models",
+        "q_threshold",
+        "feature_schema",
+        "feature_importance",
+        "performance",
+        "per_model_performance",
+        "confusion_matrix",
+        "roc_data",
+        "pr_data",
+        "calibration_data",
+        "uncertainty_test",
+        "uncertainty_calibration",
+        "conformal",
+        "training_rows",
+        "calibration_rows",
+        "test_rows",
+        "labeled_rows",
     ]
 
-    return dataframe
+    for key in required_keys:
+        if key not in artifact:
+            return False
+
+    if len(
+        artifact["feature_schema"]
+    ) == 0:
+        return False
+
+    return True
 
 
-# ==============================================================================
+def load_artifact() -> Tuple[
+    Optional[Dict],
+    Optional[str],
+]:
+    """
+    Safely load artifact.
+
+    Returns:
+        artifact, error_message
+    """
+
+    if not os.path.exists(
+        ARTIFACT_PATH
+    ):
+        return None, None
+
+    try:
+        with open(
+            ARTIFACT_PATH,
+            "rb",
+        ) as file:
+            artifact = pickle.load(file)
+
+    except Exception as exc:
+
+        return (
+            None,
+            (
+                "The existing SafeTriage-GDM artifact is invalid "
+                f"or corrupted: {type(exc).__name__}: {exc}"
+            ),
+        )
+
+    if not validate_artifact(
+        artifact
+    ):
+        return (
+            None,
+            (
+                "The existing SafeTriage-GDM artifact failed "
+                "architecture validation."
+            ),
+        )
+
+    return artifact, None
+
+
+# ------------------------------------------------------------------------------
+# INFERENCE PREPROCESSING
+# ------------------------------------------------------------------------------
+
+def prepare_inference_matrix(
+    raw_dataframe: pd.DataFrame,
+    artifact: Dict,
+) -> np.ndarray:
+    """Prepare all uploaded rows for inference."""
+
+    inference_raw = raw_dataframe.drop(
+        columns=[
+            TARGET_COLUMN,
+            ID_COLUMN,
+        ],
+        errors="ignore",
+    ).copy()
+
+    encoded = encode_dataframe(
+        inference_raw
+    )
+
+    aligned = align_to_schema(
+        encoded,
+        artifact["feature_schema"],
+    )
+
+    imputed = artifact[
+        "imputer"
+    ].transform(
+        aligned
+    )
+
+    scaled = artifact[
+        "scaler"
+    ].transform(
+        imputed
+    )
+
+    return scaled
+
+
+# ------------------------------------------------------------------------------
 # SIDEBAR
-# ==============================================================================
+# ------------------------------------------------------------------------------
 
 st.sidebar.header(
     "⚙️ Administrative Control Unit"
@@ -1846,31 +1897,43 @@ force_retrain = st.sidebar.button(
 )
 
 st.sidebar.markdown(
-    "---"
+    "### Architecture"
 )
 
 st.sidebar.markdown(
-    f"""
-    **Architecture**
-
+    """
     • Random Forest  
     • XGBoost  
-    • Logistic Regression  
+    • Logistic Regression
+    """
+)
 
-    **Data split**
+st.sidebar.markdown(
+    "### Data split"
+)
 
+st.sidebar.markdown(
+    """
     • 60% Training  
     • 15% Calibration  
-    • 25% Untouched Test  
-
-    **Conformal level**
-
-    • {100 * (1 - CONFORMAL_ALPHA):.0f}% nominal level
-
-    **Risk threshold**
-
-    • {RISK_THRESHOLD:.2f}
+    • 25% Untouched Test
     """
+)
+
+st.sidebar.markdown(
+    "### Conformal level"
+)
+
+st.sidebar.write(
+    "95% nominal level"
+)
+
+st.sidebar.markdown(
+    "### Risk threshold"
+)
+
+st.sidebar.write(
+    "0.50"
 )
 
 st.sidebar.markdown(
@@ -1882,148 +1945,172 @@ st.sidebar.caption(
 )
 
 
-# ==============================================================================
-# DATA UPLOAD
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# DATA INPUT
+# ------------------------------------------------------------------------------
 
-st.header(
-    "📁 Data Input"
-)
+st.header("📁 Data Input")
 
 uploaded_file = st.file_uploader(
     "Upload a CSV or Excel dataset",
-    type=[
-        "csv",
-        "xlsx",
-        "xls",
-    ],
+    type=["csv", "xlsx", "xls"],
 )
 
 if uploaded_file is None:
 
     st.info(
-        "Upload a dataset to begin inference, evaluation, "
-        "or pipeline training."
+        "Upload the dataset to initialise SafeTriage-GDM."
     )
 
     st.stop()
 
 
-# ==============================================================================
-# LOAD DATA
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# READ DATA
+# ------------------------------------------------------------------------------
 
 try:
 
-    raw_dataframe = load_uploaded_dataframe(
-        uploaded_file
-    )
+    file_name = uploaded_file.name.lower()
 
-except Exception as error:
+    if file_name.endswith(
+        ".csv"
+    ):
+
+        raw_dataframe = pd.read_csv(
+            uploaded_file
+        )
+
+    else:
+
+        raw_dataframe = pd.read_excel(
+            uploaded_file
+        )
+
+except Exception as exc:
 
     st.error(
-        f"Unable to read the uploaded dataset: {error}"
+        f"Unable to read the uploaded dataset: {exc}"
     )
 
     st.stop()
 
 
+raw_dataframe = raw_dataframe.reset_index(
+    drop=True
+)
+
 st.success(
-    f"Loaded {len(raw_dataframe):,} rows "
-    f"and {len(raw_dataframe.columns):,} columns."
+    f"Loaded {len(raw_dataframe):,} rows and "
+    f"{len(raw_dataframe.columns):,} columns."
 )
 
 
-# ==============================================================================
-# PREPARE TARGET
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# TARGET PREPARATION
+# ------------------------------------------------------------------------------
 
-processed_dataframe = (
-    raw_dataframe.copy()
+detected_target = detect_target_column(
+    raw_dataframe
 )
 
-if TARGET_COLUMN in processed_dataframe.columns:
+if detected_target is not None:
+
+    processed_dataframe = (
+        raw_dataframe.copy()
+    )
 
     processed_dataframe[
         TARGET_COLUMN
-    ] = parse_gdm_target(
-        processed_dataframe[
-            TARGET_COLUMN
+    ] = normalize_binary_target(
+        raw_dataframe[
+            detected_target
         ]
     )
 
 else:
+
+    processed_dataframe = (
+        raw_dataframe.copy()
+    )
 
     processed_dataframe[
         TARGET_COLUMN
     ] = np.nan
 
 
-# ==============================================================================
-# ADMINISTRATIVE TRAINING
-# ==============================================================================
+labeled_mask = (
+    processed_dataframe[
+        TARGET_COLUMN
+    ].notna()
+)
 
-should_train = (
-    force_retrain
-    or not os.path.exists(
-        ARTIFACT_PATH
-    )
+labeled_count = int(
+    labeled_mask.sum()
+)
+
+unlabeled_count = (
+    len(processed_dataframe)
+    - labeled_count
 )
 
 
-if should_train:
+# ------------------------------------------------------------------------------
+# ARTIFACT MANAGEMENT
+# ------------------------------------------------------------------------------
 
-    labeled_count = int(
-        processed_dataframe[
-            TARGET_COLUMN
-        ].notna().sum()
+artifact, artifact_error = (
+    load_artifact()
+)
+
+needs_training = (
+    force_retrain
+    or artifact is None
+)
+
+if artifact_error is not None:
+
+    st.warning(
+        artifact_error
     )
+
+    st.info(
+        "A new SafeTriage-GDM artifact will be "
+        "created from the currently uploaded labeled dataset."
+    )
+
+
+if needs_training:
 
     if labeled_count == 0:
 
-        if force_retrain:
+        st.error(
+            "Pipeline training requires valid GDM outcomes. "
+            "The uploaded dataset contains no valid labeled GDM outcomes."
+        )
 
-            st.error(
-                "Force Retraining requested, but the uploaded dataset "
-                f"contains no valid '{TARGET_COLUMN}' outcomes. "
-                "Training cannot proceed without real labeled outcomes."
-            )
-
-            st.stop()
-
-        else:
-
-            st.error(
-                "No trained SafeTriage-GDM artifact exists and the "
-                "uploaded dataset contains no valid GDM outcomes. "
-                "Training cannot proceed without real labeled outcomes."
-            )
-
-            st.stop()
+        st.stop()
 
     labeled_values = (
         processed_dataframe.loc[
-            processed_dataframe[
-                TARGET_COLUMN
-            ].notna(),
+            labeled_mask,
             TARGET_COLUMN,
         ]
         .astype(int)
         .unique()
     )
 
-    if len(labeled_values) < 2:
+    if len(labeled_values) != 2:
 
         st.error(
-            "Training requires both GDM classes (0 and 1). "
-            "The uploaded labeled dataset does not contain both classes."
+            "Pipeline training requires both GDM outcome classes "
+            "(0 and 1). No synthetic labels are generated."
         )
 
         st.stop()
 
     with st.spinner(
-        "Training SafeTriage-GDM using the required "
-        "three-model architecture..."
+        "Training the three-model SafeTriage-GDM pipeline..."
     ):
 
         try:
@@ -2032,230 +2119,157 @@ if should_train:
                 processed_dataframe
             )
 
-            save_artifact(
-                artifact
-            )
-
-        except Exception as error:
+        except Exception as exc:
 
             st.error(
                 "Pipeline training failed."
             )
 
-            st.exception(
-                error
-            )
+            st.exception(exc)
 
             st.stop()
 
     st.success(
-        "SafeTriage-GDM pipeline trained and saved successfully."
+        "SafeTriage-GDM pipeline trained successfully."
     )
 
-else:
 
-    try:
+# ------------------------------------------------------------------------------
+# STRICT ARTIFACT CHECK
+# ------------------------------------------------------------------------------
 
-        artifact = load_artifact()
+if artifact is None:
 
-    except Exception as error:
+    st.error(
+        "No valid SafeTriage-GDM artifact is available."
+    )
 
-        st.error(
-            "The existing SafeTriage-GDM artifact could not be loaded "
-            "or failed architecture validation."
+    st.stop()
+
+
+if not validate_artifact(
+    artifact
+):
+
+    st.error(
+        "The SafeTriage-GDM artifact failed strict "
+        "architecture validation."
+    )
+
+    st.stop()
+
+
+# ------------------------------------------------------------------------------
+# DISPLAY DATASET SUMMARY
+# ------------------------------------------------------------------------------
+
+summary_col1, summary_col2, summary_col3 = (
+    st.columns(3)
+)
+
+with summary_col1:
+
+    st.metric(
+        "Uploaded rows",
+        f"{len(raw_dataframe):,}",
+    )
+
+with summary_col2:
+
+    st.metric(
+        "Labeled rows",
+        f"{labeled_count:,}",
+    )
+
+with summary_col3:
+
+    st.metric(
+        "Unlabeled rows",
+        f"{unlabeled_count:,}",
+    )
+
+
+if unlabeled_count > 0:
+
+    st.info(
+        f"{unlabeled_count:,} rows have no valid GDM outcome. "
+        "They remain in the inference population but are excluded "
+        "from supervised performance and ground-truth fairness metrics."
+    )
+
+
+# ------------------------------------------------------------------------------
+# INFERENCE OVER ALL UPLOADED ROWS
+# ------------------------------------------------------------------------------
+
+try:
+
+    X_inference_scaled = (
+        prepare_inference_matrix(
+            processed_dataframe,
+            artifact,
         )
+    )
 
-        st.exception(
-            error
-        )
+    (
+        inference_model_probabilities,
+        consensus_prob,
+    ) = ensemble_probabilities(
+        artifact["models"],
+        X_inference_scaled,
+    )
 
-        st.info(
-            "Use 'Force Pipeline Retraining' after supplying a dataset "
-            "containing valid GDM outcomes."
-        )
+except Exception as exc:
 
-        st.stop()
+    st.error(
+        "Inference failed."
+    )
+
+    st.exception(exc)
+
+    st.stop()
 
 
-# ==============================================================================
-# ARTIFACT COMPONENTS
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# UNCERTAINTY
+# ------------------------------------------------------------------------------
 
-imputer = artifact[
-    "imputer"
-]
+inference_uncertainty = (
+    calculate_uncertainty(
+        inference_model_probabilities,
+        consensus_prob,
+    )
+)
 
-scaler = artifact[
-    "scaler"
-]
 
-calibrated_models = artifact[
-    "models"
-]
-
-feature_schema = artifact[
-    "feature_schema"
-]
-
-q_threshold = float(
-    artifact[
-        "q_threshold"
+epistemic_uncertainty = (
+    inference_uncertainty[
+        "epistemic_std"
     ]
 )
 
-baseline_bmi_distribution = artifact.get(
-    "baseline_bmi_distribution"
+aleatoric_uncertainty = (
+    inference_uncertainty[
+        "aleatoric_entropy"
+    ]
 )
 
-test_metrics = artifact.get(
-    "test_metrics",
-    {},
+predictive_entropy = (
+    inference_uncertainty[
+        "predictive_entropy"
+    ]
+)
+
+mutual_information = (
+    inference_uncertainty[
+        "mutual_information"
+    ]
 )
 
 
-# ==============================================================================
-# VERIFY EXACT THREE MODELS
-# ==============================================================================
-
-if set(
-    calibrated_models.keys()
-) != EXPECTED_MODELS:
-
-    st.error(
-        "Fatal architecture error: SafeTriage-GDM must contain "
-        "Random Forest, XGBoost, and Logistic Regression."
-    )
-
-    st.stop()
-
-
-# ==============================================================================
-# INFERENCE POPULATION
-#
-# IMPORTANT:
-# ALL uploaded rows are inference rows.
-# The presence or absence of a target does not remove a row from inference.
-# ==============================================================================
-
-X_inference_raw = (
-    processed_dataframe.drop(
-        columns=[
-            TARGET_COLUMN,
-            ID_COLUMN,
-        ],
-        errors="ignore",
-    ).copy()
-)
-
-try:
-
-    X_inference_encoded = (
-        encode_dataframe(
-            X_inference_raw
-        )
-    )
-
-    X_inference_aligned = (
-        align_to_schema(
-            X_inference_encoded,
-            feature_schema,
-        )
-    )
-
-    X_inference_imputed = (
-        imputer.transform(
-            X_inference_aligned
-        )
-    )
-
-    X_inference_scaled = (
-        scaler.transform(
-            X_inference_imputed
-        )
-    )
-
-except Exception as error:
-
-    st.error(
-        "Inference preprocessing failed."
-    )
-
-    st.exception(
-        error
-    )
-
-    st.stop()
-
-
-# ==============================================================================
-# THREE-MODEL INFERENCE
-# ==============================================================================
-
-try:
-
-    model_probabilities = (
-        get_model_probability_matrix(
-            calibrated_models,
-            X_inference_scaled,
-        )
-    )
-
-except Exception as error:
-
-    st.error(
-        "The three-model ensemble could not generate predictions."
-    )
-
-    st.exception(
-        error
-    )
-
-    st.stop()
-
-
-if model_probabilities.shape[0] != 3:
-
-    st.error(
-        "SafeTriage-GDM requires exactly three ensemble models."
-    )
-
-    st.stop()
-
-
-# ==============================================================================
-# UNCERTAINTY DECOMPOSITION
-# ==============================================================================
-
-uncertainty = (
-    calculate_uncertainty_decomposition(
-        model_probabilities
-    )
-)
-
-consensus_prob = uncertainty[
-    "ensemble_probability"
-]
-
-predictive_entropy = uncertainty[
-    "predictive_entropy"
-]
-
-aleatoric_uncertainty = uncertainty[
-    "aleatoric_uncertainty"
-]
-
-epistemic_uncertainty = uncertainty[
-    "epistemic_uncertainty"
-]
-
-model_disagreement_std = uncertainty[
-    "model_disagreement_std"
-]
-
-
-# ==============================================================================
+# ------------------------------------------------------------------------------
 # RISK CLASSIFICATION
-# ==============================================================================
+# ------------------------------------------------------------------------------
 
 risk_flags = (
     consensus_prob >= RISK_THRESHOLD
@@ -2268,172 +2282,53 @@ risk_labels = np.where(
 )
 
 
-# ==============================================================================
-# CONFORMAL PREDICTION SETS
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# CONFORMAL SETS
+# ------------------------------------------------------------------------------
+
+q_threshold = float(
+    artifact["q_threshold"]
+)
 
 conformal_sets = (
-    generate_conformal_sets(
+    conformal_prediction_sets(
         consensus_prob,
         q_threshold,
     )
 )
 
 
-conformal_set_sizes = np.array(
-    [
-        2
-        if " + " in prediction_set
-        else 1
-        for prediction_set
-        in conformal_sets
-    ]
-)
-
-
-# ==============================================================================
-# POPULATION DRIFT
-# ==============================================================================
-
-current_bmi_distribution = None
-bmi_psi = np.nan
-
-if BMI_COLUMN in processed_dataframe.columns:
-
-    current_bmi_distribution = (
-        calculate_bmi_distribution(
-            processed_dataframe[
-                BMI_COLUMN
-            ]
-        )
-    )
-
-    bmi_psi = calculate_psi(
-        baseline_bmi_distribution,
-        current_bmi_distribution,
-    )
-
-
-mean_predictive_entropy = float(
-    np.nanmean(
-        predictive_entropy
-    )
-)
-
-mean_epistemic_uncertainty = float(
-    np.nanmean(
-        epistemic_uncertainty
-    )
-)
-
-
-# ==============================================================================
-# RUNTIME CONFORMAL SAFETY ADAPTATION
-# ==============================================================================
-#
-# IMPORTANT:
-# This is a monitoring heuristic.
-# It does NOT preserve a formal 95% conformal coverage guarantee under
-# distribution shift.
-# ==============================================================================
-
-adapted_q_threshold = q_threshold
-
-drift_adaptation_applied = False
-
-if (
-    np.isfinite(bmi_psi)
-    and bmi_psi >= DRIFT_THRESHOLD
-    and mean_predictive_entropy > 0.70
-):
-
-    adapted_q_threshold = (
-        q_threshold * 0.90
-    )
-
-    drift_adaptation_applied = True
-
-    conformal_sets = (
-        generate_conformal_sets(
-            consensus_prob,
-            adapted_q_threshold,
-        )
-    )
-
-    conformal_set_sizes = np.array(
-        [
-            2
-            if " + " in prediction_set
-            else 1
-            for prediction_set
-            in conformal_sets
-        ]
-    )
-
-
-# ==============================================================================
+# ------------------------------------------------------------------------------
 # RESULTS DASHBOARD
-# ==============================================================================
+# ------------------------------------------------------------------------------
 
 results_dashboard = pd.DataFrame(
     {
-        "GDM Risk Probability": (
-            consensus_prob
-        ),
-
-        "Risk Classification": (
-            risk_labels
-        ),
-
-        "Conformal Prediction Set": (
-            conformal_sets
-        ),
-
-        "Model Positive Flag": (
-            risk_flags
-        ),
-
-        "RF Probability": (
-            model_probabilities[0]
-        ),
-
-        "XGBoost Probability": (
-            model_probabilities[1]
-        ),
-
-        "Logistic Probability": (
-            model_probabilities[2]
-        ),
-
-        "Epistemic Uncertainty": (
-            epistemic_uncertainty
-        ),
-
-        "Aleatoric Uncertainty": (
-            aleatoric_uncertainty
-        ),
-
-        "Predictive Entropy": (
-            predictive_entropy
-        ),
-
-        "Model Disagreement SD": (
-            model_disagreement_std
-        ),
+        "GDM Risk Probability":
+            consensus_prob,
+        "Risk Classification":
+            risk_labels,
+        "Conformal Prediction Set":
+            conformal_sets,
+        "Epistemic Uncertainty":
+            epistemic_uncertainty,
+        "Aleatoric Uncertainty":
+            aleatoric_uncertainty,
+        "Predictive Entropy":
+            predictive_entropy,
+        "Mutual Information":
+            mutual_information,
+        "Model Positive Flag":
+            risk_flags,
     }
 )
 
-
-# ==============================================================================
-# FINAL OUTPUT
-# ==============================================================================
 
 final_output_view = pd.concat(
     [
         raw_dataframe.reset_index(
             drop=True
         ),
-
         results_dashboard.reset_index(
             drop=True
         ),
@@ -2442,56 +2337,134 @@ final_output_view = pd.concat(
 )
 
 
-# ==============================================================================
+# ------------------------------------------------------------------------------
 # FAIRNESS
-# ==============================================================================
+# ------------------------------------------------------------------------------
 
 try:
 
-    fairness_metrics = (
+    fairness = (
         calculate_fairness_metrics(
             processed_dataframe,
             consensus_prob,
         )
     )
 
-except Exception as error:
+except Exception as exc:
 
-    st.error(
-        "Fairness calculation failed."
+    fairness = {
+        "younger_positive_rate": np.nan,
+        "older_positive_rate": np.nan,
+        "demographic_parity_difference":
+            np.nan,
+        "younger_fpr": np.nan,
+        "older_fpr": np.nan,
+        "fpr_disparity": np.nan,
+        "fairness_sample_size": 0,
+    }
+
+    st.warning(
+        f"Fairness calculation was unavailable: {exc}"
     )
 
-    st.exception(
-        error
+
+# ------------------------------------------------------------------------------
+# DRIFT
+# ------------------------------------------------------------------------------
+
+baseline_bmi = artifact.get(
+    "baseline_bmi_distribution"
+)
+
+current_bmi = bmi_distribution(
+    raw_dataframe
+)
+
+if (
+    baseline_bmi is not None
+    and current_bmi is not None
+):
+
+    psi_value = (
+        population_stability_index(
+            baseline_bmi,
+            current_bmi,
+        )
     )
 
-    st.stop()
+else:
+
+    psi_value = np.nan
 
 
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# OPTIONAL CONFORMAL RUNTIME HEURISTIC
+# ------------------------------------------------------------------------------
+
+runtime_q = q_threshold
+
+mean_predictive_entropy = float(
+    np.mean(
+        predictive_entropy
+    )
+)
+
+if (
+    np.isfinite(psi_value)
+    and psi_value >= DRIFT_LIMIT
+    and mean_predictive_entropy >= 0.70
+):
+
+    runtime_q = float(
+        np.clip(
+            q_threshold * 0.90,
+            0.0,
+            1.0,
+        )
+    )
+
+    runtime_conformal_sets = (
+        conformal_prediction_sets(
+            consensus_prob,
+            runtime_q,
+        )
+    )
+
+else:
+
+    runtime_conformal_sets = (
+        conformal_sets
+    )
+
+
+# ------------------------------------------------------------------------------
 # TABS
-# ==============================================================================
+# ------------------------------------------------------------------------------
 
 (
     triage_tab,
-    xai_tab,
     performance_tab,
+    uncertainty_tab,
+    fairness_tab,
+    xai_tab,
 ) = st.tabs(
     [
         "🩺 Patient Triage Console",
-        "🔎 XAI Attribution",
-        "📊 Performance, Uncertainty & Fairness",
+        "📈 Predictive Performance",
+        "🎲 Uncertainty & Conformal Safety",
+        "⚖️ Fairness & Population Shift",
+        "🔍 XAI Attribution",
     ]
 )
 
 
 # ==============================================================================
-# TAB 1 — TRIAGE
+# TRIAGE TAB
 # ==============================================================================
 
 with triage_tab:
 
-    st.header(
+    st.subheader(
         "Patient Triage Console"
     )
 
@@ -2501,106 +2474,637 @@ with triage_tab:
         together with a conformal prediction set representing predictive
         uncertainty.
 
-        The system separates:
-
         **Risk estimation** — the ensemble probability of GDM.
 
         **Triage classification** — the operational lower-risk/high-risk
-        classification.
+        classification at the 0.50 threshold.
 
-        **Conformal safety bounds** — the uncertainty-aware prediction
-        set used to expose ambiguous cases.
-
-        **Model uncertainty** — disagreement and entropy derived from
-        the three-model ensemble.
+        **Conformal safety bounds** — the uncertainty-aware prediction set
+        used to expose ambiguous cases.
         """
     )
 
-    st.divider()
+    risk_col1, risk_col2, risk_col3, risk_col4 = (
+        st.columns(4)
+    )
 
-    # --------------------------------------------------------------------------
-    # Population summary
-    # --------------------------------------------------------------------------
+    with risk_col1:
 
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
         st.metric(
-            "Uploaded Rows",
-            f"{len(raw_dataframe):,}",
+            "Mean GDM Risk",
+            f"{np.mean(consensus_prob):.2%}",
         )
 
-    with col2:
+    with risk_col2:
+
         st.metric(
             "High-Risk Flags",
             f"{int(risk_flags.sum()):,}",
         )
 
-    with col3:
+    with risk_col3:
+
         st.metric(
-            "Ambiguous Conformal Sets",
-            f"{int(np.sum(conformal_set_sizes == 2)):,}",
+            "Mean Epistemic",
+            f"{np.mean(epistemic_uncertainty):.4f}",
         )
 
-    with col4:
+    with risk_col4:
+
         st.metric(
-            "Mean GDM Probability",
-            f"{100 * np.mean(consensus_prob):.1f}%",
+            "Mean Aleatoric",
+            f"{np.mean(aleatoric_uncertainty):.4f}",
         )
 
-    st.divider()
+    st.markdown(
+        "### Inference Results"
+    )
 
-    # --------------------------------------------------------------------------
-    # Individual patient selection
-    # --------------------------------------------------------------------------
+    display_df = final_output_view.copy()
+
+    if "GDM Risk Probability" in display_df.columns:
+
+        display_df[
+            "GDM Risk Probability"
+        ] = display_df[
+            "GDM Risk Probability"
+        ].map(
+            lambda x: f"{x:.2%}"
+            if pd.notna(x)
+            else ""
+        )
+
+    for column in [
+        "Epistemic Uncertainty",
+        "Aleatoric Uncertainty",
+        "Predictive Entropy",
+        "Mutual Information",
+    ]:
+
+        if column in display_df.columns:
+
+            display_df[column] = (
+                display_df[column].map(
+                    lambda x: f"{x:.4f}"
+                    if pd.notna(x)
+                    else ""
+                )
+            )
+
+    st.dataframe(
+        display_df,
+        width="stretch",
+        hide_index=True,
+    )
+
+    st.markdown(
+        "### Risk Probability Distribution"
+    )
+
+    histogram_data = pd.DataFrame(
+        {
+            "GDM Risk Probability":
+                consensus_prob
+        }
+    )
+
+    st.bar_chart(
+        histogram_data,
+        x=None,
+        y="GDM Risk Probability",
+        width="stretch",
+    )
+
+    st.markdown(
+        "### Conformal Safety Interpretation"
+    )
+
+    st.info(
+        f"""
+        The fitted conformal threshold is
+        **q = {q_threshold:.4f}** at the nominal
+        **{CONFORMAL_LEVEL:.0%}** level.
+
+        Cases receiving **Healthy + GDM High Risk** represent
+        uncertainty/ambiguity under the conformal rule and should
+        not be treated as confidently classified cases.
+
+        Conformal prediction is an uncertainty quantification mechanism;
+        it does not constitute a clinical diagnosis or treatment
+        recommendation.
+        """
+    )
+
+
+# ==============================================================================
+# PERFORMANCE TAB
+# ==============================================================================
+
+with performance_tab:
 
     st.subheader(
-        "Individual Case Inspection"
+        "📈 Predictive Performance"
     )
 
-    selected_index = st.number_input(
-        "Select uploaded row",
-        min_value=0,
-        max_value=max(
-            len(final_output_view) - 1,
-            0,
-        ),
-        value=0,
-        step=1,
+    st.markdown(
+        """
+        These performance measures describe the behaviour of the trained
+        SafeTriage-GDM model on its **untouched held-out test set**.
+
+        They are therefore distinct from predictions generated for the
+        currently uploaded inference population.
+        """
     )
 
-    selected_probability = float(
-        consensus_prob[selected_index]
-    )
-
-    selected_epistemic = float(
-        epistemic_uncertainty[
-            selected_index
-        ]
-    )
-
-    selected_aleatoric = float(
-        aleatoric_uncertainty[
-            selected_index
-        ]
-    )
-
-    selected_entropy = float(
-        predictive_entropy[
-            selected_index
-        ]
-    )
-
-    selected_set = conformal_sets[
-        selected_index
+    performance = artifact[
+        "performance"
     ]
 
-    selected_risk = risk_labels[
-        selected_index
+    # --------------------------------------------------------------------------
+    # MAIN METRICS
+    # --------------------------------------------------------------------------
+
+    p1, p2, p3, p4 = st.columns(4)
+
+    with p1:
+
+        auc_value = performance[
+            "ROC-AUC"
+        ]
+
+        st.metric(
+            "ROC-AUC",
+            (
+                f"{auc_value:.4f}"
+                if np.isfinite(auc_value)
+                else "N/A"
+            ),
+        )
+
+    with p2:
+
+        st.metric(
+            "PR-AUC",
+            f"{performance['PR-AUC']:.4f}",
+        )
+
+    with p3:
+
+        st.metric(
+            "Brier Score",
+            f"{performance['Brier Score']:.4f}",
+        )
+
+    with p4:
+
+        st.metric(
+            "Log Loss",
+            f"{performance['Log Loss']:.4f}",
+        )
+
+    p5, p6, p7, p8 = st.columns(4)
+
+    with p5:
+
+        st.metric(
+            "Sensitivity",
+            f"{performance['Sensitivity']:.2%}",
+        )
+
+    with p6:
+
+        st.metric(
+            "Specificity",
+            f"{performance['Specificity']:.2%}",
+        )
+
+    with p7:
+
+        st.metric(
+            "Precision",
+            f"{performance['Precision']:.2%}",
+        )
+
+    with p8:
+
+        st.metric(
+            "F1 Score",
+            f"{performance['F1 Score']:.4f}",
+        )
+
+    # --------------------------------------------------------------------------
+    # MODEL COMPARISON
+    # --------------------------------------------------------------------------
+
+    st.markdown(
+        "### Three-Model Performance Comparison"
+    )
+
+    comparison_rows = []
+
+    for model_name in EXPECTED_MODEL_ORDER:
+
+        model_metrics = artifact[
+            "per_model_performance"
+        ][model_name]
+
+        comparison_rows.append(
+            {
+                "Model":
+                    model_name,
+                "ROC-AUC":
+                    model_metrics["ROC-AUC"],
+                "PR-AUC":
+                    model_metrics["PR-AUC"],
+                "Brier Score":
+                    model_metrics["Brier Score"],
+                "Log Loss":
+                    model_metrics["Log Loss"],
+                "Sensitivity":
+                    model_metrics["Sensitivity"],
+                "Specificity":
+                    model_metrics["Specificity"],
+                "F1":
+                    model_metrics["F1 Score"],
+            }
+        )
+
+    comparison_rows.append(
+        {
+            "Model":
+                "Three-Model Ensemble",
+            "ROC-AUC":
+                performance["ROC-AUC"],
+            "PR-AUC":
+                performance["PR-AUC"],
+            "Brier Score":
+                performance["Brier Score"],
+            "Log Loss":
+                performance["Log Loss"],
+            "Sensitivity":
+                performance["Sensitivity"],
+            "Specificity":
+                performance["Specificity"],
+            "F1":
+                performance["F1 Score"],
+        }
+    )
+
+    comparison_df = pd.DataFrame(
+        comparison_rows
+    )
+
+    st.dataframe(
+        comparison_df,
+        width="stretch",
+        hide_index=True,
+    )
+
+    # --------------------------------------------------------------------------
+    # ROC CURVE
+    # --------------------------------------------------------------------------
+
+    st.markdown(
+        "### ROC Curve"
+    )
+
+    roc_data = artifact[
+        "roc_data"
     ]
+
+    if len(roc_data["fpr"]) > 0:
+
+        roc_df = pd.DataFrame(
+            {
+                "False Positive Rate":
+                    roc_data["fpr"],
+                "True Positive Rate":
+                    roc_data["tpr"],
+            }
+        )
+
+        st.line_chart(
+            roc_df,
+            x="False Positive Rate",
+            y="True Positive Rate",
+            width="stretch",
+        )
+
+    else:
+
+        st.warning(
+            "ROC curve unavailable because the test set does not "
+            "contain both outcome classes."
+        )
+
+    # --------------------------------------------------------------------------
+    # PRECISION-RECALL
+    # --------------------------------------------------------------------------
+
+    st.markdown(
+        "### Precision–Recall Curve"
+    )
+
+    pr_data = artifact[
+        "pr_data"
+    ]
+
+    if len(pr_data["precision"]) > 0:
+
+        pr_df = pd.DataFrame(
+            {
+                "Recall":
+                    pr_data["recall"],
+                "Precision":
+                    pr_data["precision"],
+            }
+        )
+
+        st.line_chart(
+            pr_df,
+            x="Recall",
+            y="Precision",
+            width="stretch",
+        )
+
+    # --------------------------------------------------------------------------
+    # CALIBRATION
+    # --------------------------------------------------------------------------
+
+    st.markdown(
+        "### Probability Calibration"
+    )
+
+    calibration_data = artifact[
+        "calibration_data"
+    ]
+
+    if len(
+        calibration_data[
+            "fraction_of_positives"
+        ]
+    ) > 0:
+
+        calibration_df = pd.DataFrame(
+            {
+                "Mean Predicted Probability":
+                    calibration_data[
+                        "mean_predicted_value"
+                    ],
+                "Observed Positive Fraction":
+                    calibration_data[
+                        "fraction_of_positives"
+                    ],
+            }
+        )
+
+        st.line_chart(
+            calibration_df,
+            x="Mean Predicted Probability",
+            y="Observed Positive Fraction",
+            width="stretch",
+        )
+
+    # --------------------------------------------------------------------------
+    # CONFUSION MATRIX
+    # --------------------------------------------------------------------------
+
+    st.markdown(
+        "### Confusion Matrix — Untouched Test Set"
+    )
+
+    cm = np.asarray(
+        artifact["confusion_matrix"]
+    )
+
+    cm_df = pd.DataFrame(
+        cm,
+        index=[
+            "Actual Lower Risk",
+            "Actual GDM",
+        ],
+        columns=[
+            "Predicted Lower Risk",
+            "Predicted GDM",
+        ],
+    )
+
+    st.dataframe(
+        cm_df,
+        width="stretch",
+    )
+
+    # --------------------------------------------------------------------------
+    # TEST SET INFO
+    # --------------------------------------------------------------------------
+
+    st.markdown(
+        "### Evaluation Population"
+    )
+
+    e1, e2, e3 = st.columns(3)
+
+    with e1:
+
+        st.metric(
+            "Training Rows",
+            f"{artifact['training_rows']:,}",
+        )
+
+    with e2:
+
+        st.metric(
+            "Calibration Rows",
+            f"{artifact['calibration_rows']:,}",
+        )
+
+    with e3:
+
+        st.metric(
+            "Untouched Test Rows",
+            f"{artifact['test_rows']:,}",
+        )
+
+    st.caption(
+        "The test set remains untouched during preprocessing fitting, "
+        "model training, SMOTETomek resampling, and calibration."
+    )
+
+
+# ==============================================================================
+# UNCERTAINTY TAB
+# ==============================================================================
+
+with uncertainty_tab:
 
     st.subheader(
-        f"Case {selected_index}"
+        "🎲 Uncertainty & Conformal Safety"
+    )
+
+    st.markdown(
+        """
+        SafeTriage-GDM separates uncertainty into complementary components.
+
+        **Epistemic uncertainty** represents uncertainty associated with
+        disagreement between the three predictive models. Here it is
+        operationalized using the standard deviation of their predicted
+        GDM probabilities.
+
+        **Aleatoric uncertainty** represents irreducible predictive
+        uncertainty and is operationalized as the expected Bernoulli
+        entropy of the three model probabilities.
+
+        **Predictive entropy** is the entropy of the final ensemble
+        probability.
+
+        **Mutual information** is the difference between predictive
+        entropy and expected model entropy and provides an additional
+        epistemic-uncertainty measure.
+        """
+    )
+
+    u1, u2, u3, u4 = st.columns(4)
+
+    with u1:
+
+        st.metric(
+            "Mean Epistemic Uncertainty",
+            f"{np.mean(epistemic_uncertainty):.4f}",
+        )
+
+    with u2:
+
+        st.metric(
+            "Mean Aleatoric Uncertainty",
+            f"{np.mean(aleatoric_uncertainty):.4f}",
+        )
+
+    with u3:
+
+        st.metric(
+            "Mean Predictive Entropy",
+            f"{np.mean(predictive_entropy):.4f}",
+        )
+
+    with u4:
+
+        st.metric(
+            "Mean Mutual Information",
+            f"{np.mean(mutual_information):.4f}",
+        )
+
+    # --------------------------------------------------------------------------
+    # UNCERTAINTY TABLE
+    # --------------------------------------------------------------------------
+
+    uncertainty_summary = pd.DataFrame(
+        {
+            "Measure": [
+                "Epistemic uncertainty",
+                "Aleatoric uncertainty",
+                "Predictive entropy",
+                "Mutual information",
+            ],
+            "Mean": [
+                np.mean(
+                    epistemic_uncertainty
+                ),
+                np.mean(
+                    aleatoric_uncertainty
+                ),
+                np.mean(
+                    predictive_entropy
+                ),
+                np.mean(
+                    mutual_information
+                ),
+            ],
+            "Median": [
+                np.median(
+                    epistemic_uncertainty
+                ),
+                np.median(
+                    aleatoric_uncertainty
+                ),
+                np.median(
+                    predictive_entropy
+                ),
+                np.median(
+                    mutual_information
+                ),
+            ],
+            "Maximum": [
+                np.max(
+                    epistemic_uncertainty
+                ),
+                np.max(
+                    aleatoric_uncertainty
+                ),
+                np.max(
+                    predictive_entropy
+                ),
+                np.max(
+                    mutual_information
+                ),
+            ],
+        }
+    )
+
+    st.dataframe(
+        uncertainty_summary,
+        width="stretch",
+        hide_index=True,
+    )
+
+    # --------------------------------------------------------------------------
+    # MODEL DISAGREEMENT
+    # --------------------------------------------------------------------------
+
+    st.markdown(
+        "### Model Probability Disagreement"
+    )
+
+    disagreement_df = pd.DataFrame(
+        {
+            "Random Forest":
+                inference_model_probabilities[0],
+            "XGBoost":
+                inference_model_probabilities[1],
+            "Logistic Regression":
+                inference_model_probabilities[2],
+            "Ensemble":
+                consensus_prob,
+            "Epistemic SD":
+                epistemic_uncertainty,
+            "Mutual Information":
+                mutual_information,
+        }
+    )
+
+    disagreement_display = (
+        disagreement_df.copy()
+    )
+
+    for column in disagreement_display.columns:
+
+        disagreement_display[
+            column
+        ] = disagreement_display[
+            column
+        ].round(5)
+
+    st.dataframe(
+        disagreement_display,
+        width="stretch",
+        hide_index=True,
+    )
+
+    # --------------------------------------------------------------------------
+    # CONFORMAL
+    # --------------------------------------------------------------------------
+
+    st.markdown(
+        "### Conformal Safety Assessment"
     )
 
     c1, c2, c3 = st.columns(3)
@@ -2608,894 +3112,381 @@ with triage_tab:
     with c1:
 
         st.metric(
-            "GDM Risk Probability",
-            f"{100 * selected_probability:.1f}%",
-        )
-
-        st.metric(
-            "Risk Classification",
-            selected_risk,
+            "Nominal Level",
+            f"{CONFORMAL_LEVEL:.0%}",
         )
 
     with c2:
 
         st.metric(
-            "Conformal Prediction Set",
-            selected_set,
-        )
-
-        st.metric(
-            "Epistemic Uncertainty",
-            f"{selected_epistemic:.4f}",
+            "Conformal q",
+            f"{q_threshold:.4f}",
         )
 
     with c3:
 
         st.metric(
-            "Aleatoric Uncertainty",
-            f"{selected_aleatoric:.4f}",
+            "Test Empirical Coverage",
+            f"{artifact['conformal']['test_coverage']:.2%}",
         )
 
-        st.metric(
-            "Predictive Entropy",
-            f"{selected_entropy:.4f}",
+    st.markdown(
+        f"""
+        **Calibration empirical coverage:**
+        {artifact['conformal']['calibration_coverage']:.2%}
+
+        **Untouched test empirical coverage:**
+        {artifact['conformal']['test_coverage']:.2%}
+
+        These are empirical coverage measurements for the implemented
+        conformal procedure. The runtime drift adjustment below is a
+        research heuristic and should **not** be interpreted as a formal
+        guarantee of 95% coverage under arbitrary population shift.
+        """
+    )
+
+    conformal_counts = (
+        pd.Series(
+            runtime_conformal_sets
         )
-
-    st.subheader(
-        "Three-Model Probability Profile"
-    )
-
-    selected_model_table = pd.DataFrame(
-        {
-            "Model": [
-                "Random Forest",
-                "XGBoost",
-                "Logistic Regression",
-                "3-Model Ensemble",
-            ],
-            "GDM Probability": [
-                model_probabilities[
-                    0,
-                    selected_index,
-                ],
-                model_probabilities[
-                    1,
-                    selected_index,
-                ],
-                model_probabilities[
-                    2,
-                    selected_index,
-                ],
-                selected_probability,
-            ],
-        }
-    )
-
-    selected_model_table[
-        "GDM Probability"
-    ] = selected_model_table[
-        "GDM Probability"
-    ].map(
-        lambda value: f"{100 * value:.2f}%"
+        .value_counts()
+        .rename_axis(
+            "Prediction Set"
+        )
+        .reset_index(
+            name="Count"
+        )
     )
 
     st.dataframe(
-        selected_model_table,
-        width="stretch",
-        hide_index=True,
-    )
-
-    st.subheader(
-        "Uploaded Patient Data"
-    )
-
-    patient_data = (
-        raw_dataframe.iloc[
-            [selected_index]
-        ].T
-    )
-
-    patient_data.columns = [
-        "Value"
-    ]
-
-    st.dataframe(
-        patient_data,
-        width="stretch",
-    )
-
-    st.divider()
-
-    st.subheader(
-        "Full Prediction Dashboard"
-    )
-
-    display_dashboard = final_output_view.copy()
-
-    probability_columns = [
-        "GDM Risk Probability",
-        "RF Probability",
-        "XGBoost Probability",
-        "Logistic Probability",
-        "Epistemic Uncertainty",
-        "Aleatoric Uncertainty",
-        "Predictive Entropy",
-        "Model Disagreement SD",
-    ]
-
-    for column in probability_columns:
-
-        if column in display_dashboard.columns:
-
-            display_dashboard[
-                column
-            ] = display_dashboard[
-                column
-            ].astype(float).round(4)
-
-    st.dataframe(
-        display_dashboard,
+        conformal_counts,
         width="stretch",
         hide_index=True,
     )
 
     # --------------------------------------------------------------------------
-    # Download
+    # DRIFT ADJUSTMENT
     # --------------------------------------------------------------------------
 
-    csv_output = (
-        final_output_view.to_csv(
-            index=False
-        ).encode("utf-8")
-    )
+    if np.isfinite(psi_value):
 
-    st.download_button(
-        "⬇️ Download Prediction Results",
-        data=csv_output,
-        file_name="safetriage_gdm_predictions.csv",
-        mime="text/csv",
-        width="stretch",
-    )
+        if psi_value >= DRIFT_LIMIT:
 
-
-# ==============================================================================
-# TAB 2 — XAI
-# ==============================================================================
-
-with xai_tab:
-
-    st.header(
-        "🔎 XAI Attribution"
-    )
-
-    st.markdown(
-        """
-        The attribution analysis summarizes global feature importance
-        across the three trained SafeTriage-GDM components.
-
-        Random Forest and XGBoost contribute tree-based feature
-        importance, while Logistic Regression contributes the absolute
-        magnitude of its fitted coefficients.
-
-        Each model's importance values are normalized before the
-        three-model average is calculated.
-
-        These values describe model behaviour within the research
-        system. They should **not** be interpreted as causal effects
-        or as evidence that a particular characteristic independently
-        causes GDM.
-        """
-    )
-
-    st.divider()
-
-    xai_df = artifact.get(
-        "feature_importance"
-    )
-
-    if (
-        xai_df is None
-        or xai_df.empty
-    ):
-
-        st.warning(
-            "Feature attribution information is unavailable."
-        )
-
-    else:
-
-        st.subheader(
-            "Global Three-Model Attribution"
-        )
-
-        xai_display = (
-            xai_df.copy()
-        )
-
-        xai_display[
-            "Attribution Weight Score"
-        ] = xai_display[
-            "Attribution Weight Score"
-        ].astype(float)
-
-        xai_display[
-            "Attribution Weight Score"
-        ] = xai_display[
-            "Attribution Weight Score"
-        ].map(
-            lambda value: f"{100 * value:.2f}%"
-        )
-
-        st.dataframe(
-            xai_display,
-            width="stretch",
-            hide_index=True,
-        )
-
-        st.info(
-            "Attribution weights are relative global model-importance "
-            "scores, not causal effects."
-        )
-
-
-# ==============================================================================
-# TAB 3 — PERFORMANCE, UNCERTAINTY & FAIRNESS
-# ==============================================================================
-
-with performance_tab:
-
-    st.header(
-        "📊 Performance, Uncertainty & Fairness"
-    )
-
-    st.markdown(
-        """
-        Predictive performance below is calculated from the model's
-        **untouched held-out test set** created during training.
-
-        These metrics are therefore distinct from predictions generated
-        for the currently uploaded inference population.
-        """
-    )
-
-    # ==========================================================================
-    # PERFORMANCE
-    # ==========================================================================
-
-    st.subheader(
-        "1. Predictive Performance"
-    )
-
-    if test_metrics:
-
-        metric_rows = []
-
-        for model_name in [
-            "Random Forest",
-            "XGBoost",
-            "Logistic Regression",
-            "3-Model Ensemble",
-        ]:
-
-            if model_name not in test_metrics:
-                continue
-
-            model_metrics = (
-                test_metrics[
-                    model_name
-                ]
-            )
-
-            metric_rows.append(
-                {
-                    "Model": model_name,
-                    "ROC-AUC": model_metrics.get(
-                        "ROC-AUC",
-                        np.nan,
-                    ),
-                    "PR-AUC": model_metrics.get(
-                        "PR-AUC",
-                        np.nan,
-                    ),
-                    "Accuracy": model_metrics.get(
-                        "Accuracy",
-                        np.nan,
-                    ),
-                    "Sensitivity": model_metrics.get(
-                        "Sensitivity",
-                        np.nan,
-                    ),
-                    "Specificity": model_metrics.get(
-                        "Specificity",
-                        np.nan,
-                    ),
-                    "Precision": model_metrics.get(
-                        "Precision",
-                        np.nan,
-                    ),
-                    "F1-score": model_metrics.get(
-                        "F1-score",
-                        np.nan,
-                    ),
-                    "Brier Score": model_metrics.get(
-                        "Brier Score",
-                        np.nan,
-                    ),
-                    "Log Loss": model_metrics.get(
-                        "Log Loss",
-                        np.nan,
-                    ),
-                }
-            )
-
-        metrics_df = pd.DataFrame(
-            metric_rows
-        )
-
-        st.dataframe(
-            metrics_df.style.format(
-                {
-                    "ROC-AUC": "{:.4f}",
-                    "PR-AUC": "{:.4f}",
-                    "Accuracy": "{:.4f}",
-                    "Sensitivity": "{:.4f}",
-                    "Specificity": "{:.4f}",
-                    "Precision": "{:.4f}",
-                    "F1-score": "{:.4f}",
-                    "Brier Score": "{:.4f}",
-                    "Log Loss": "{:.4f}",
-                }
-            ),
-            width="stretch",
-            hide_index=True,
-        )
-
-    else:
-
-        st.warning(
-            "Test-set performance metrics are unavailable."
-        )
-
-    # ==========================================================================
-    # ENSEMBLE PERFORMANCE SUMMARY
-    # ==========================================================================
-
-    if (
-        "3-Model Ensemble"
-        in test_metrics
-    ):
-
-        ensemble_metrics = test_metrics[
-            "3-Model Ensemble"
-        ]
-
-        st.subheader(
-            "3-Model Ensemble Summary"
-        )
-
-        c1, c2, c3, c4, c5 = st.columns(5)
-
-        with c1:
-            st.metric(
-                "ROC-AUC",
-                f"{ensemble_metrics['ROC-AUC']:.4f}",
-            )
-
-        with c2:
-            st.metric(
-                "PR-AUC",
-                f"{ensemble_metrics['PR-AUC']:.4f}",
-            )
-
-        with c3:
-            st.metric(
-                "Brier Score",
-                f"{ensemble_metrics['Brier Score']:.4f}",
-            )
-
-        with c4:
-            st.metric(
-                "Sensitivity",
-                f"{ensemble_metrics['Sensitivity']:.4f}",
-            )
-
-        with c5:
-            st.metric(
-                "Specificity",
-                f"{ensemble_metrics['Specificity']:.4f}",
-            )
-
-    # ==========================================================================
-    # CONFUSION MATRIX
-    # ==========================================================================
-
-    st.subheader(
-        "Confusion Matrix — Untouched Test Set"
-    )
-
-    if (
-        "3-Model Ensemble"
-        in test_metrics
-    ):
-
-        cm = test_metrics[
-            "3-Model Ensemble"
-        ][
-            "Confusion Matrix"
-        ]
-
-        cm_df = pd.DataFrame(
-            cm,
-            index=[
-                "Actual Healthy",
-                "Actual GDM",
-            ],
-            columns=[
-                "Predicted Healthy",
-                "Predicted GDM",
-            ],
-        )
-
-        st.dataframe(
-            cm_df,
-            width="stretch",
-        )
-
-    # ==========================================================================
-    # ROC CURVE DATA
-    # ==========================================================================
-
-    st.subheader(
-        "ROC Curve — Untouched Test Set"
-    )
-
-    roc_data = artifact.get(
-        "roc_curve"
-    )
-
-    if roc_data is not None:
-
-        roc_df = pd.DataFrame(
-            {
-                "False Positive Rate": (
-                    roc_data["fpr"]
-                ),
-                "True Positive Rate": (
-                    roc_data["tpr"]
-                ),
-                "Threshold": (
-                    roc_data["thresholds"]
-                ),
-            }
-        )
-
-        st.line_chart(
-            roc_df.set_index(
-                "False Positive Rate"
-            )[
-                "True Positive Rate"
-            ],
-            width="stretch",
-        )
-
-    # ==========================================================================
-    # CALIBRATION CURVE
-    # ==========================================================================
-
-    st.subheader(
-        "Probability Calibration"
-    )
-
-    calibration_data = artifact.get(
-        "calibration_curve"
-    )
-
-    if calibration_data is not None:
-
-        calibration_df = pd.DataFrame(
-            {
-                "Mean Predicted Probability": (
-                    calibration_data[
-                        "mean_predicted_value"
-                    ]
-                ),
-                "Observed Positive Fraction": (
-                    calibration_data[
-                        "fraction_of_positives"
-                    ]
-                ),
-            }
-        )
-
-        st.line_chart(
-            calibration_df.set_index(
-                "Mean Predicted Probability"
-            ),
-            width="stretch",
-        )
-
-        st.caption(
-            "A well-calibrated model should produce observed event "
-            "frequencies that approximately track predicted probabilities."
-        )
-
-    # ==========================================================================
-    # UNCERTAINTY
-    # ==========================================================================
-
-    st.divider()
-
-    st.subheader(
-        "2. Uncertainty Analysis"
-    )
-
-    st.markdown(
-        """
-        SafeTriage-GDM separates uncertainty into several related
-        quantities.
-
-        **Epistemic uncertainty:** a model-disagreement / mutual-information-
-        style proxy calculated from the three-model ensemble.
-
-        **Aleatoric uncertainty:** expected predictive entropy across the
-        individual ensemble probabilities.
-
-        **Predictive entropy:** entropy of the ensemble-averaged GDM
-        probability.
-
-        These quantities should be interpreted as uncertainty estimates
-        within the finite three-model research ensemble, not as exact
-        Bayesian posterior quantities.
-        """
-    )
-
-    u1, u2, u3, u4 = st.columns(4)
-
-    with u1:
-        st.metric(
-            "Mean Epistemic",
-            f"{mean_epistemic_uncertainty:.4f}",
-        )
-
-    with u2:
-        st.metric(
-            "Mean Aleatoric",
-            f"{float(np.nanmean(aleatoric_uncertainty)):.4f}",
-        )
-
-    with u3:
-        st.metric(
-            "Mean Predictive Entropy",
-            f"{mean_predictive_entropy:.4f}",
-        )
-
-    with u4:
-        st.metric(
-            "Mean Model Disagreement",
-            f"{float(np.nanmean(model_disagreement_std)):.4f}",
-        )
-
-    st.subheader(
-        "Uncertainty Distribution"
-    )
-
-    uncertainty_distribution = pd.DataFrame(
-        {
-            "Epistemic Uncertainty": (
-                epistemic_uncertainty
-            ),
-            "Aleatoric Uncertainty": (
-                aleatoric_uncertainty
-            ),
-            "Predictive Entropy": (
-                predictive_entropy
-            ),
-        }
-    )
-
-    st.line_chart(
-        uncertainty_distribution,
-        width="stretch",
-    )
-
-    st.subheader(
-        "Risk Probability vs Uncertainty"
-    )
-
-    risk_uncertainty_df = pd.DataFrame(
-        {
-            "GDM Risk Probability": (
-                consensus_prob
-            ),
-            "Epistemic Uncertainty": (
-                epistemic_uncertainty
-            ),
-            "Aleatoric Uncertainty": (
-                aleatoric_uncertainty
-            ),
-            "Predictive Entropy": (
-                predictive_entropy
-            ),
-        }
-    )
-
-    st.dataframe(
-        risk_uncertainty_df.describe().T,
-        width="stretch",
-    )
-
-    # ==========================================================================
-    # CONFORMAL SAFETY
-    # ==========================================================================
-
-    st.divider()
-
-    st.subheader(
-        "3. Conformal Safety Bounds"
-    )
-
-    cc1, cc2, cc3, cc4 = st.columns(4)
-
-    with cc1:
-        st.metric(
-            "Calibration q-threshold",
-            f"{q_threshold:.4f}",
-        )
-
-    with cc2:
-        st.metric(
-            "Effective Runtime q-threshold",
-            f"{adapted_q_threshold:.4f}",
-        )
-
-    with cc3:
-        st.metric(
-            "Test Coverage",
-            (
-                f"{100 * artifact.get('test_conformal_coverage', np.nan):.2f}%"
-            ),
-        )
-
-    with cc4:
-        st.metric(
-            "Test Singleton Rate",
-            (
-                f"{100 * artifact.get('test_singleton_rate', np.nan):.2f}%"
-            ),
-        )
-
-    st.write(
-        "Mean test conformal prediction-set size:",
-        f"{artifact.get('test_mean_conformal_set_size', np.nan):.3f}",
-    )
-
-    st.write(
-        "Current uploaded-population ambiguous-set rate:",
-        f"{100 * np.mean(conformal_set_sizes == 2):.2f}%",
-    )
-
-    if drift_adaptation_applied:
-
-        st.warning(
-            "A runtime conformal-threshold adaptation was triggered "
-            "because the BMI drift monitor exceeded the monitoring "
-            "threshold and predictive entropy was high. This adaptation "
-            "is a safety-monitoring heuristic and does NOT preserve a "
-            "formal conformal coverage guarantee under distribution shift."
-        )
-
-    else:
-
-        st.info(
-            "No runtime conformal-threshold adaptation was triggered."
-        )
-
-    # ==========================================================================
-    # DRIFT
-    # ==========================================================================
-
-    st.subheader(
-        "4. Population-Shift Monitoring"
-    )
-
-    d1, d2, d3 = st.columns(3)
-
-    with d1:
-
-        if np.isfinite(bmi_psi):
-
-            st.metric(
-                "BMI PSI",
-                f"{bmi_psi:.4f}",
+            st.warning(
+                f"Population-shift PSI is {psi_value:.4f}, "
+                f"which exceeds the configured {DRIFT_LIMIT:.2f} "
+                "monitoring threshold."
             )
 
         else:
 
-            st.metric(
-                "BMI PSI",
-                "Unavailable",
+            st.success(
+                f"Population-shift PSI is {psi_value:.4f}, "
+                "below the configured monitoring threshold."
             )
 
-    with d2:
+        if runtime_q != q_threshold:
 
-        st.metric(
-            "Drift Threshold",
-            f"{DRIFT_THRESHOLD:.2f}",
+            st.warning(
+                f"A research heuristic reduced the runtime conformal "
+                f"threshold from {q_threshold:.4f} to "
+                f"{runtime_q:.4f} because drift and predictive "
+                "entropy were both elevated."
+            )
+
+    else:
+
+        st.info(
+            "BMI-based population-shift monitoring is unavailable "
+            "because a usable BMI field was not found."
         )
 
-    with d3:
 
-        if (
-            np.isfinite(bmi_psi)
-            and bmi_psi >= DRIFT_THRESHOLD
-        ):
+# ==============================================================================
+# FAIRNESS TAB
+# ==============================================================================
 
-            st.metric(
-                "Drift Status",
-                "Elevated",
-            )
-
-        else:
-
-            st.metric(
-                "Drift Status",
-                "Within Monitor",
-            )
-
-    st.caption(
-        "BMI PSI is a population-shift monitoring statistic. "
-        "It is not a clinical risk score."
-    )
-
-    # ==========================================================================
-    # FAIRNESS
-    # ==========================================================================
-
-    st.divider()
+with fairness_tab:
 
     st.subheader(
-        "5. Algorithmic Fairness Audit"
+        "⚖️ Algorithmic Fairness & Population Shift"
     )
 
     st.markdown(
         """
-        Demographic parity compares the positive prediction rates of
-        the age groups <35 and ≥35 years.
+        Fairness analysis is performed on the same inference population
+        used by the ensemble.
 
-        FPR disparity compares false-positive rates between the same
-        groups using only observations with valid GDM ground truth.
+        **Demographic parity difference** compares the positive-risk
+        classification rate between the age groups below 35 and 35 or older.
 
-        **FPR disparity is not equivalent to full equalized odds**, which
-        requires comparison of both false-positive and true-positive rates.
+        **FPR disparity** compares false-positive rates between those groups
+        using only rows with valid ground-truth GDM outcomes.
+
+        FPR disparity alone is **not equivalent to full equalized odds**,
+        because equalized odds requires both FPR and TPR parity.
         """
     )
 
-    f1, f2, f3, f4 = st.columns(4)
+    f1, f2, f3 = st.columns(3)
 
     with f1:
 
-        value = fairness_metrics[
+        value = fairness[
             "demographic_parity_difference"
         ]
 
         st.metric(
             "Demographic Parity Difference",
             (
-                "Unavailable"
-                if np.isnan(value)
-                else f"{value:.4f}"
+                f"{value:.4f}"
+                if np.isfinite(value)
+                else "N/A"
             ),
         )
 
     with f2:
 
-        value = fairness_metrics[
+        value = fairness[
             "fpr_disparity"
         ]
 
         st.metric(
             "FPR Disparity",
             (
-                "Unavailable"
-                if np.isnan(value)
-                else f"{value:.4f}"
+                f"{value:.4f}"
+                if np.isfinite(value)
+                else "N/A"
             ),
         )
 
     with f3:
 
         st.metric(
-            "Age <35 Positive Rate",
-            (
-                "Unavailable"
-                if np.isnan(
-                    fairness_metrics[
-                        "younger_positive_rate"
-                    ]
-                )
-                else (
-                    f"{100 * fairness_metrics['younger_positive_rate']:.2f}%"
-                )
-            ),
-        )
-
-    with f4:
-
-        st.metric(
-            "Age ≥35 Positive Rate",
-            (
-                "Unavailable"
-                if np.isnan(
-                    fairness_metrics[
-                        "older_positive_rate"
-                    ]
-                )
-                else (
-                    f"{100 * fairness_metrics['older_positive_rate']:.2f}%"
-                )
-            ),
+            "Labeled Fairness Sample",
+            f"{fairness['fairness_sample_size']:,}",
         )
 
     fairness_table = pd.DataFrame(
         {
             "Metric": [
-                "Age <35 sample size",
-                "Age ≥35 sample size",
-                "Fairness labeled sample size",
-                "Age <35 FPR",
-                "Age ≥35 FPR",
-                "FPR disparity",
+                "Positive rate — Age < 35",
+                "Positive rate — Age ≥ 35",
+                "False-positive rate — Age < 35",
+                "False-positive rate — Age ≥ 35",
             ],
             "Value": [
-                fairness_metrics[
-                    "younger_sample_size"
+                fairness[
+                    "younger_positive_rate"
                 ],
-                fairness_metrics[
-                    "older_sample_size"
+                fairness[
+                    "older_positive_rate"
                 ],
-                fairness_metrics[
-                    "fairness_sample_size"
-                ],
-                fairness_metrics[
+                fairness[
                     "younger_fpr"
                 ],
-                fairness_metrics[
+                fairness[
                     "older_fpr"
-                ],
-                fairness_metrics[
-                    "fpr_disparity"
                 ],
             ],
         }
     )
 
+    fairness_table[
+        "Value"
+    ] = fairness_table[
+        "Value"
+    ].map(
+        lambda x:
+            f"{x:.4f}"
+            if pd.notna(x)
+            else "N/A"
+    )
+
     st.dataframe(
-        fairness_table.style.format(
-            {
-                "Value": lambda value: (
-                    f"{value:.4f}"
-                    if isinstance(
-                        value,
-                        (float, np.floating),
-                    )
-                    and np.isfinite(value)
-                    else str(value)
-                )
-            }
-        ),
+        fairness_table,
         width="stretch",
         hide_index=True,
     )
 
+    # --------------------------------------------------------------------------
+    # BMI SHIFT
+    # --------------------------------------------------------------------------
+
+    st.markdown(
+        "### BMI Population Shift"
+
+    )
+
+    if (
+        baseline_bmi is not None
+        and current_bmi is not None
+    ):
+
+        drift_table = pd.DataFrame(
+            {
+                "BMI Category":
+                    BMI_LABELS,
+                "Baseline":
+                    [
+                        baseline_bmi.get(
+                            category,
+                            0.0,
+                        )
+                        for category in BMI_LABELS
+                    ],
+                "Current":
+                    [
+                        current_bmi.get(
+                            category,
+                            0.0,
+                        )
+                        for category in BMI_LABELS
+                    ],
+            }
+        )
+
+        drift_table[
+            "Baseline"
+        ] = drift_table[
+            "Baseline"
+        ].map(
+            lambda x: f"{x:.2%}"
+        )
+
+        drift_table[
+            "Current"
+        ] = drift_table[
+            "Current"
+        ].map(
+            lambda x: f"{x:.2%}"
+        )
+
+        st.dataframe(
+            drift_table,
+            width="stretch",
+            hide_index=True,
+        )
+
+        st.metric(
+            "BMI Population Stability Index",
+            f"{psi_value:.4f}",
+        )
+
+        st.caption(
+            "PSI < 0.10 is commonly interpreted as little shift; "
+            "0.10–0.20 as moderate shift; and >0.20 as potentially "
+            "substantial shift. These are monitoring heuristics, not "
+            "clinical thresholds."
+        )
+
+    else:
+
+        st.info(
+            "BMI population-shift analysis is unavailable."
+        )
+
 
 # ==============================================================================
-# FOOTER
+# XAI TAB
 # ==============================================================================
 
-st.divider()
+with xai_tab:
+
+    st.subheader(
+        "🔍 XAI Attribution"
+    )
+
+    st.markdown(
+        """
+        The attribution analysis summarizes global feature importance
+        across the three components of SafeTriage-GDM.
+
+        Random Forest and XGBoost contribute tree-based feature
+        importance, while Logistic Regression contributes the absolute
+        magnitude of its standardized coefficient.
+
+        These values describe predictive contribution within the research
+        system. They should **not** be interpreted as causal effects or as
+        evidence that a specific characteristic independently causes GDM.
+        """
+    )
+
+    xai_df = artifact[
+        "feature_importance"
+    ]
+
+    if (
+        xai_df is not None
+        and not xai_df.empty
+    ):
+
+        display_xai = xai_df.copy()
+
+        display_xai[
+            "Attribution Weight Score"
+        ] = display_xai[
+            "Attribution Weight Score"
+        ].round(5)
+
+        for column in [
+            "Random Forest",
+            "XGBoost",
+            "Logistic Regression |Abs Coefficient|",
+        ]:
+
+            if column in display_xai.columns:
+
+                display_xai[
+                    column
+                ] = display_xai[
+                    column
+                ].round(6)
+
+        st.dataframe(
+            display_xai,
+            width="stretch",
+            hide_index=True,
+        )
+
+    else:
+
+        st.info(
+            "Feature attribution information is unavailable."
+        )
+
+
+# ==============================================================================
+# FOOTER / TECHNICAL STATUS
+# ==============================================================================
+
+st.markdown(
+    "---"
+)
+
+status_col1, status_col2, status_col3 = (
+    st.columns(3)
+)
+
+with status_col1:
+
+    st.caption(
+        "SafeTriage-GDM"
+    )
+
+with status_col2:
+
+    st.caption(
+        "Three-model uncertainty-aware ensemble"
+    )
+
+with status_col3:
+
+    st.caption(
+        f"Artifact: {APP_VERSION}"
+    )
 
 st.caption(
-    f"{APP_TITLE} — {APP_VERSION} | "
-    "Three-model ensemble: Random Forest + XGBoost + Logistic Regression | "
-    "No synthetic outcomes are generated."
+    "Research prototype — not for clinical diagnosis, treatment, "
+    "or autonomous clinical decision-making."
 )
