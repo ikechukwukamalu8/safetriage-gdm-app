@@ -15,16 +15,11 @@ The system combines three complementary machine-learning models:
 - XGBoost
 - Logistic Regression
 
-Their predicted GDM probabilities are combined into a simple ensemble:
+The three models produce individual GDM probabilities, which are combined using an equal-weight ensemble:
 
-$$
-P(\mathrm{GDM}) =
-\frac{
-P_{\mathrm{RF}} +
-P_{\mathrm{XGB}} +
-P_{\mathrm{LR}}
-}{3}
-$$
+**Ensemble Probability**
+
+`P(GDM) = [P_RF + P_XGB + P_LR] / 3`
 
 The application is designed for **research and methodological evaluation**. It is **not a medical device** and must not be used as a substitute for professional medical diagnosis, treatment, or clinical decision-making.
 
@@ -58,7 +53,7 @@ SafeTriage-GDM investigates several aspects of responsible clinical machine lear
 
 ## 🧠 Model Architecture
 
-SafeTriage-GDM uses exactly three predictive models:
+SafeTriage-GDM uses exactly three predictive models.
 
 ### 1. Random Forest
 
@@ -74,17 +69,17 @@ Logistic Regression provides a comparatively interpretable linear modelling base
 
 ### Ensemble Probability
 
-The final research risk score is calculated as the arithmetic mean of the three model probabilities:
+The final research risk score is calculated as:
 
-$$
-P_{\mathrm{ensemble}}
-=
-\frac{
-P_{\mathrm{RF}} +
-P_{\mathrm{XGB}} +
-P_{\mathrm{LR}}
-}{3}
-$$
+`P_ensemble = (P_RF + P_XGB + P_LR) / 3`
+
+where:
+
+- `P_RF` = Random Forest probability of GDM
+- `P_XGB` = XGBoost probability of GDM
+- `P_LR` = Logistic Regression probability of GDM
+
+All three models contribute equally to the ensemble.
 
 ---
 
@@ -198,22 +193,17 @@ This design is intended to reduce obvious outcome leakage.
 
 SafeTriage-GDM uses a dedicated calibration set to estimate a conformal nonconformity threshold.
 
-For a calibration observation, the nonconformity score is defined as:
+For a calibration observation, the nonconformity score is:
 
-$$
-s_i
-=
-1 -
-P(Y_i \mid X_i)
-$$
+`S_i = 1 - P(Y_i | X_i)`
 
 where:
 
-- $Y_i$ is the observed GDM class.
-- $X_i$ represents the predictor variables.
-- $P(Y_i \mid X_i)$ is the ensemble probability assigned to the true class.
+- `Y_i` is the observed GDM class.
+- `X_i` represents the predictor variables.
+- `P(Y_i | X_i)` is the ensemble probability assigned to the true class.
 
-The finite-sample conformal quantile is then calculated from the calibration scores.
+The finite-sample conformal quantile is calculated from the calibration scores.
 
 The application uses a research confidence setting of **90%**.
 
@@ -231,62 +221,37 @@ SafeTriage-GDM reports several uncertainty-related quantities.
 
 The standard deviation of the three model probabilities is used as a model-disagreement proxy:
 
-$$
-\sigma_{\mathrm{models}}
-=
-\operatorname{SD}
-\left(
-P_{\mathrm{RF}},
-P_{\mathrm{XGB}},
-P_{\mathrm{LR}}
-\right)
-$$
+`σ_models = SD(P_RF, P_XGB, P_LR)`
 
 A larger value indicates greater disagreement between the constituent models.
+
+---
 
 ### Aleatoric Entropy
 
 Binary entropy is calculated for each model probability:
 
-$$
-H(p)
-=
--p\log(p)
--
-(1-p)\log(1-p)
-$$
+`H(p) = -p log(p) - (1-p) log(1-p)`
 
 The model-specific entropy values are averaged to obtain an aleatoric-uncertainty proxy.
+
+---
 
 ### Predictive Entropy
 
 Predictive entropy is calculated using the ensemble probability:
 
-$$
-H_{\mathrm{predictive}}
-=
--p\log(p)
--
-(1-p)\log(1-p)
-$$
+`H_predictive = -p log(p) - (1-p) log(1-p)`
 
-where $p$ is the ensemble probability of GDM.
+where `p` is the ensemble probability of GDM.
+
+---
 
 ### Mutual Information
 
 The application estimates a model-disagreement-related mutual-information quantity as:
 
-$$
-MI
-=
-\max
-\left(
-H_{\mathrm{predictive}}
--
-H_{\mathrm{aleatoric}},
-0
-\right)
-$$
+`MI = max(H_predictive - H_aleatoric, 0)`
 
 These quantities are intended for research-oriented uncertainty analysis. They should not be interpreted as measures of clinical certainty.
 
@@ -320,34 +285,18 @@ PR-AUC summarizes the precision-recall relationship and is particularly informat
 
 The Brier score evaluates the squared difference between predicted probability and observed binary outcome:
 
-$$
-\mathrm{Brier}
-=
-\frac{1}{n}
-\sum_{i=1}^{n}
-(p_i-y_i)^2
-$$
+`Brier = (1/n) × Σ(p_i - y_i)²`
 
 where:
 
-- $p_i$ is the predicted probability.
-- $y_i$ is the observed binary outcome.
+- `p_i` is the predicted probability.
+- `y_i` is the observed binary outcome.
 
 ### Log Loss
 
 Binary log loss is calculated as:
 
-$$
-\mathrm{LogLoss}
-=
--\frac{1}{n}
-\sum_{i=1}^{n}
-\left[
-y_i\log(p_i)
-+
-(1-y_i)\log(1-p_i)
-\right]
-$$
+`LogLoss = -(1/n) × Σ[y_i log(p_i) + (1-y_i) log(1-p_i)]`
 
 Lower values indicate better probabilistic performance.
 
@@ -370,15 +319,7 @@ Maternal age is divided into the following groups:
 
 The selection rate is the proportion of observations classified as elevated risk within each age group:
 
-$$
-\mathrm{SelectionRate}_g
-=
-\frac{
-\sum_i I(\hat{Y}_i=1)
-}{
-N_g
-}
-$$
+`Selection Rate_g = Number classified as elevated risk / Total observations in group g`
 
 The application reports the difference between the highest and lowest group-level selection rates.
 
@@ -386,25 +327,11 @@ The application reports the difference between the highest and lowest group-leve
 
 For observations with known GDM ground truth, the false positive rate is:
 
-$$
-\mathrm{FPR}_g
-=
-\frac{
-FP_g
-}{
-FP_g + TN_g
-}
-$$
+`FPR_g = FP_g / (FP_g + TN_g)`
 
 The application reports:
 
-$$
-\mathrm{FPR\ Disparity}
-=
-\max_g(\mathrm{FPR}_g)
--
-\min_g(\mathrm{FPR}_g)
-$$
+`FPR Disparity = Maximum group FPR - Minimum group FPR`
 
 This metric is explicitly labelled **FPR disparity**.
 
@@ -428,27 +355,16 @@ BMI categories are:
 
 PSI is calculated as:
 
-$$
-PSI
-=
-\sum_j
-(A_j-E_j)
-\ln
-\left(
-\frac{A_j}{E_j}
-\right)
-$$
+`PSI = Σ(A_j - E_j) × ln(A_j / E_j)`
 
 where:
 
-- $A_j$ is the observed/current proportion in category $j$.
-- $E_j$ is the baseline/training proportion in category $j$.
+- `A_j` is the observed/current proportion in category `j`.
+- `E_j` is the baseline/training proportion in category `j`.
 
 The application uses a research monitoring threshold of:
 
-$$
-PSI = 0.20
-$$
+`PSI = 0.20`
 
 A PSI warning does **not** automatically modify model predictions or the conformal threshold.
 
