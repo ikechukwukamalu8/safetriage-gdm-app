@@ -1,4 +1,4 @@
-# 🛡️ SafeTriage-GDM: Uncertainty-Quantified Triage System
+# 🛡️ SafeTriage-GDM: Uncertainty-Quantified Clinical Triage System for Gestational Diabetes Mellitus (GDM) Risk with Algorithmic Fairness Auditing & Conformal Safety Bounds
 
 **SafeTriage-GDM** is a production-grade clinical decision support and triage system designed to predict Gestational Diabetes Mellitus (GDM) risks. It combines an ensemble machine learning architecture (Random Forest, XGBoost, and Logistic Regression) with **Conformal Prediction** (95% safety coverage guarantees), **Unsupervised Domain Adaptation (UDA)** for population drift monitoring, **Algorithmic Fairness Auditing** across demographic cohorts, and **Explainable AI (XAI)** metrics.
 
@@ -40,3 +40,6 @@ source venv/bin/activate  # On Windows use: venv\Scripts\activate
 
 # Install required packages
 pip install -r requirements.txt
+
+4. Launch the Web Application
+streamlit run app.py
