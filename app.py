@@ -8,17 +8,18 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
-import warnings
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 
-# ------------------------------------------------------------------------------
-# Scikit-learn imports
-# ------------------------------------------------------------------------------
+
+# ==============================================================================
+# 1. REQUIRED MACHINE-LEARNING IMPORTS
+# ==============================================================================
 
 try:
     from sklearn.experimental import enable_iterative_imputer  # noqa: F401
@@ -35,7 +36,6 @@ try:
         f1_score,
         log_loss,
         precision_score,
-        recall_score,
         roc_auc_score,
         roc_curve,
         precision_recall_curve,
@@ -43,26 +43,26 @@ try:
     from sklearn.calibration import calibration_curve
 
 except Exception as exc:
-    st.error("A required scikit-learn component could not be imported.")
+    st.error(
+        "A required scikit-learn component could not be imported."
+    )
     st.exception(exc)
     st.stop()
 
-
-# ------------------------------------------------------------------------------
-# XGBoost
-# ------------------------------------------------------------------------------
 
 try:
     from xgboost import XGBClassifier
 
 except Exception as exc:
-    st.error("XGBoost could not be imported.")
+    st.error(
+        "XGBoost could not be imported."
+    )
     st.exception(exc)
     st.stop()
 
 
 # ==============================================================================
-# 1. STREAMLIT CONFIGURATION
+# 2. STREAMLIT CONFIGURATION
 # ==============================================================================
 
 st.set_page_config(
@@ -74,7 +74,7 @@ st.set_page_config(
 
 
 # ==============================================================================
-# 2. APPLICATION CONSTANTS
+# 3. APPLICATION CONSTANTS
 # ==============================================================================
 
 APP_TITLE = "SafeTriage-GDM"
@@ -109,7 +109,7 @@ MIN_FAIRNESS_GROUP_SIZE = 10
 
 
 # ==============================================================================
-# 3. REQUIRED MODEL ARCHITECTURE
+# 4. REQUIRED MODEL ARCHITECTURE
 # ==============================================================================
 
 EXPECTED_MODEL_ORDER = [
@@ -124,7 +124,7 @@ EXPECTED_MODEL_KEYS = set(
 
 
 # ==============================================================================
-# 4. APPROVED ANTEPARTUM PREDICTORS
+# 5. APPROVED ANTEPARTUM PREDICTORS
 # ==============================================================================
 
 ANTEpartum_PREDICTORS = [
@@ -147,7 +147,7 @@ ANTEpartum_PREDICTORS = [
 
 
 # ==============================================================================
-# 5. EXPLICITLY EXCLUDED POST-DELIVERY VARIABLES
+# 6. EXPLICITLY EXCLUDED POST-DELIVERY VARIABLES
 # ==============================================================================
 
 POST_DELIVERY_COLUMNS = [
@@ -169,8 +169,7 @@ POST_DELIVERY_COLUMNS = [
 ]
 
 
-# Outcome-adjacent variables are excluded from the baseline predictor schema
-# because their availability may occur later in pregnancy.
+# Outcome-adjacent variables are excluded from the baseline predictor schema.
 TIMING_SENSITIVE_EXCLUDED = [
     "Gestational hypertension?",
     "Evidence of pre-eclampsia?",
@@ -178,7 +177,7 @@ TIMING_SENSITIVE_EXCLUDED = [
 
 
 # ==============================================================================
-# 6. BMI BINS
+# 7. BMI BINS
 # ==============================================================================
 
 BMI_BINS = [
@@ -200,7 +199,7 @@ BMI_LABELS = [
 
 
 # ==============================================================================
-# 7. GENERAL UTILITIES
+# 8. GENERAL UTILITIES
 # ==============================================================================
 
 def safe_float(value: Any) -> float:
@@ -216,7 +215,38 @@ def safe_float(value: Any) -> float:
         return np.nan
 
 
-def normalize_target(value: Any) -> Optional[int]:
+def dataframe_signature(df: pd.DataFrame) -> str:
+    """
+    Create a deterministic signature for the current dataset.
+
+    This ensures that uploading a different Excel file with the same
+    columns triggers a new model-training run.
+    """
+
+    try:
+        hashed = pd.util.hash_pandas_object(
+            df,
+            index=True,
+        ).values.tobytes()
+
+        return hashlib.sha256(
+            hashed
+        ).hexdigest()
+
+    except Exception:
+        return hashlib.sha256(
+            df.to_csv(
+                index=True
+            ).encode(
+                "utf-8",
+                errors="ignore",
+            )
+        ).hexdigest()
+
+
+def normalize_target(
+    value: Any,
+) -> Optional[int]:
     """
     Convert common binary target representations to:
         0 = No
@@ -226,10 +256,21 @@ def normalize_target(value: Any) -> Optional[int]:
     if pd.isna(value):
         return None
 
-    if isinstance(value, (bool, np.bool_)):
+    if isinstance(
+        value,
+        (bool, np.bool_),
+    ):
         return int(value)
 
-    if isinstance(value, (int, float, np.integer, np.floating)):
+    if isinstance(
+        value,
+        (
+            int,
+            float,
+            np.integer,
+            np.floating,
+        ),
+    ):
 
         if value == 1:
             return 1
@@ -237,7 +278,9 @@ def normalize_target(value: Any) -> Optional[int]:
         if value == 0:
             return 0
 
-    text = str(value).strip().lower()
+    text = str(
+        value
+    ).strip().lower()
 
     positive_values = {
         "yes",
@@ -269,8 +312,9 @@ def normalize_target(value: Any) -> Optional[int]:
     return None
 
 
-def prepare_target(df: pd.DataFrame) -> pd.Series:
-    """Parse the GDM target."""
+def prepare_target(
+    df: pd.DataFrame,
+) -> pd.Series:
 
     return (
         df[TARGET_COLUMN]
@@ -292,16 +336,15 @@ def encode_dataframe(
         dummy_na=False,
     )
 
-    return encoded.astype(np.float64)
+    return encoded.astype(
+        np.float64
+    )
 
 
 def align_to_schema(
     encoded_df: pd.DataFrame,
     feature_schema: List[str],
 ) -> pd.DataFrame:
-    """
-    Align data to the training feature schema.
-    """
 
     return (
         encoded_df
@@ -309,7 +352,9 @@ def align_to_schema(
             columns=feature_schema,
             fill_value=0.0,
         )
-        .astype(np.float64)
+        .astype(
+            np.float64
+        )
     )
 
 
@@ -329,7 +374,8 @@ def bernoulli_entropy(
     return float(
         -(
             p * math.log(p)
-            + (1 - p) * math.log(1 - p)
+            + (1 - p)
+            * math.log(1 - p)
         )
     )
 
@@ -341,10 +387,15 @@ def format_metric(
 
     try:
 
-        if value is None or not np.isfinite(value):
+        if (
+            value is None
+            or not np.isfinite(value)
+        ):
             return "N/A"
 
-        return f"{float(value):.{digits}f}"
+        return (
+            f"{float(value):.{digits}f}"
+        )
 
     except Exception:
         return "N/A"
@@ -356,17 +407,22 @@ def format_pct(
 
     try:
 
-        if value is None or not np.isfinite(value):
+        if (
+            value is None
+            or not np.isfinite(value)
+        ):
             return "N/A"
 
-        return f"{100 * float(value):.1f}%"
+        return (
+            f"{100 * float(value):.1f}%"
+        )
 
     except Exception:
         return "N/A"
 
 
 # ==============================================================================
-# 8. DATASET VALIDATION
+# 9. DATASET VALIDATION
 # ==============================================================================
 
 def validate_dataset(
@@ -384,7 +440,8 @@ def validate_dataset(
 
     available_predictors = [
         column
-        for column in ANTEpartum_PREDICTORS
+        for column
+        in ANTEpartum_PREDICTORS
         if column in df.columns
     ]
 
@@ -398,7 +455,8 @@ def validate_dataset(
     if BMI_COLUMN not in df.columns:
 
         errors.append(
-            f"Required BMI column is missing: `{BMI_COLUMN}`"
+            f"Required BMI column is missing: "
+            f"`{BMI_COLUMN}`"
         )
 
     if AGE_COLUMN not in df.columns:
@@ -420,13 +478,14 @@ def get_available_predictors(
 
     return [
         column
-        for column in ANTEpartum_PREDICTORS
+        for column
+        in ANTEpartum_PREDICTORS
         if column in df.columns
     ]
 
 
 # ==============================================================================
-# 9. DATA SPLITTING
+# 10. DATA SPLITTING
 # ==============================================================================
 
 def split_data(
@@ -444,10 +503,6 @@ def split_data(
     Exact 60/15/25 train/calibration/test split.
     """
 
-    # First split:
-    # 75% development
-    # 25% untouched test
-
     (
         X_train_temp,
         X_test,
@@ -460,13 +515,6 @@ def split_data(
         random_state=RANDOM_STATE,
         stratify=y,
     )
-
-    # From the 75% development set:
-    # 80% train
-    # 20% calibration
-    #
-    # 75% * 80% = 60%
-    # 75% * 20% = 15%
 
     (
         X_train,
@@ -492,7 +540,7 @@ def split_data(
 
 
 # ==============================================================================
-# 10. MODEL CONSTRUCTION
+# 11. MODEL CONSTRUCTION
 # ==============================================================================
 
 def build_models(
@@ -520,54 +568,60 @@ def build_models(
         )
 
     scale_pos_weight = (
-        negative_count / positive_count
+        negative_count
+        / positive_count
     )
 
     models = {
 
-        "Random Forest": RandomForestClassifier(
-            n_estimators=300,
-            random_state=RANDOM_STATE,
-            class_weight="balanced",
-            n_jobs=-1,
-            min_samples_leaf=3,
-        ),
+        "Random Forest":
+            RandomForestClassifier(
+                n_estimators=300,
+                random_state=RANDOM_STATE,
+                class_weight="balanced",
+                n_jobs=-1,
+                min_samples_leaf=3,
+            ),
 
-        "XGBoost": XGBClassifier(
-            n_estimators=300,
-            max_depth=3,
-            learning_rate=0.03,
-            subsample=0.90,
-            colsample_bytree=0.90,
-            objective="binary:logistic",
-            eval_metric="logloss",
-            random_state=RANDOM_STATE,
-            n_jobs=-1,
-            scale_pos_weight=scale_pos_weight,
-        ),
+        "XGBoost":
+            XGBClassifier(
+                n_estimators=300,
+                max_depth=3,
+                learning_rate=0.03,
+                subsample=0.90,
+                colsample_bytree=0.90,
+                objective="binary:logistic",
+                eval_metric="logloss",
+                random_state=RANDOM_STATE,
+                n_jobs=-1,
+                scale_pos_weight=scale_pos_weight,
+            ),
 
-        "Logistic Regression": LogisticRegression(
-            max_iter=2000,
-            class_weight="balanced",
-            random_state=RANDOM_STATE,
-        ),
+        "Logistic Regression":
+            LogisticRegression(
+                max_iter=2000,
+                class_weight="balanced",
+                random_state=RANDOM_STATE,
+            ),
     }
 
     return models
 
 
 # ==============================================================================
-# 11. TRAIN COMPLETE PIPELINE
+# 12. TRAIN COMPLETE PIPELINE
 # ==============================================================================
 
 def train_pipeline(
     df: pd.DataFrame,
 ) -> Dict[str, Any]:
     """
-    Train the complete SafeTriage-GDM research pipeline.
+    Train the complete SafeTriage-GDM pipeline.
     """
 
-    predictors = get_available_predictors(df)
+    predictors = get_available_predictors(
+        df
+    )
 
     if len(predictors) < 5:
 
@@ -575,16 +629,22 @@ def train_pipeline(
             "Insufficient approved predictors are available."
         )
 
-    target = prepare_target(df)
+    target = prepare_target(
+        df
+    )
 
-    labeled_mask = target.notna()
+    labeled_mask = (
+        target.notna()
+    )
 
     labeled_df = df.loc[
         labeled_mask
     ].copy()
 
     y = (
-        target.loc[labeled_mask]
+        target.loc[
+            labeled_mask
+        ]
         .astype(int)
     )
 
@@ -599,10 +659,6 @@ def train_pipeline(
         predictors
     ].copy()
 
-    # --------------------------------------------------------------------------
-    # Split
-    # --------------------------------------------------------------------------
-
     (
         X_train_raw,
         X_cal_raw,
@@ -616,7 +672,7 @@ def train_pipeline(
     )
 
     # --------------------------------------------------------------------------
-    # Encode
+    # One-hot encoding
     # --------------------------------------------------------------------------
 
     X_train_encoded = encode_dataframe(
@@ -628,17 +684,21 @@ def train_pipeline(
     )
 
     X_cal_encoded = align_to_schema(
-        encode_dataframe(X_cal_raw),
+        encode_dataframe(
+            X_cal_raw
+        ),
         feature_schema,
     )
 
     X_test_encoded = align_to_schema(
-        encode_dataframe(X_test_raw),
+        encode_dataframe(
+            X_test_raw
+        ),
         feature_schema,
     )
 
     # --------------------------------------------------------------------------
-    # Imputation
+    # Iterative imputation
     # --------------------------------------------------------------------------
 
     imputer = IterativeImputer(
@@ -667,7 +727,7 @@ def train_pipeline(
     )
 
     # --------------------------------------------------------------------------
-    # Scaling
+    # Standardisation
     # --------------------------------------------------------------------------
 
     scaler = StandardScaler()
@@ -691,7 +751,7 @@ def train_pipeline(
     )
 
     # --------------------------------------------------------------------------
-    # Models
+    # Train exactly three models
     # --------------------------------------------------------------------------
 
     models = build_models(
@@ -700,7 +760,9 @@ def train_pipeline(
 
     for model_name in EXPECTED_MODEL_ORDER:
 
-        models[model_name].fit(
+        models[
+            model_name
+        ].fit(
             X_train_scaled,
             y_train,
         )
@@ -715,23 +777,26 @@ def train_pipeline(
         )
 
     # --------------------------------------------------------------------------
-    # Calibration predictions
+    # Calibration probabilities
     # --------------------------------------------------------------------------
 
-    calibration_probability_matrix = np.column_stack(
-        [
-            models[name]
-            .predict_proba(
-                X_cal_scaled
-            )[:, 1]
-            for name in EXPECTED_MODEL_ORDER
-        ]
+    calibration_probability_matrix = (
+        np.column_stack(
+            [
+                models[name]
+                .predict_proba(
+                    X_cal_scaled
+                )[:, 1]
+
+                for name
+                in EXPECTED_MODEL_ORDER
+            ]
+        )
     )
 
     calibration_ensemble = (
-        calibration_probability_matrix.mean(
-            axis=1
-        )
+        calibration_probability_matrix
+        .mean(axis=1)
     )
 
     # --------------------------------------------------------------------------
@@ -739,8 +804,9 @@ def train_pipeline(
     # --------------------------------------------------------------------------
 
     y_cal_array = (
-        np.asarray(y_cal)
-        .astype(int)
+        np.asarray(
+            y_cal
+        ).astype(int)
     )
 
     true_class_probability = np.where(
@@ -750,7 +816,8 @@ def train_pipeline(
     )
 
     nonconformity_scores = (
-        1.0 - true_class_probability
+        1.0
+        - true_class_probability
     )
 
     n_calibration = len(
@@ -789,46 +856,55 @@ def train_pipeline(
         )
 
     # --------------------------------------------------------------------------
-    # Test predictions
+    # Test probabilities
     # --------------------------------------------------------------------------
 
     test_probability_dict = {
 
         name:
-        models[name]
-        .predict_proba(
-            X_test_scaled
-        )[:, 1]
+            models[name]
+            .predict_proba(
+                X_test_scaled
+            )[:, 1]
 
-        for name in EXPECTED_MODEL_ORDER
+        for name
+        in EXPECTED_MODEL_ORDER
     }
 
-    test_probability_matrix = np.column_stack(
-        [
-            test_probability_dict[name]
-            for name in EXPECTED_MODEL_ORDER
-        ]
+    test_probability_matrix = (
+        np.column_stack(
+            [
+                test_probability_dict[name]
+                for name
+                in EXPECTED_MODEL_ORDER
+            ]
+        )
     )
 
     ensemble_test_probability = (
-        test_probability_matrix.mean(
-            axis=1
-        )
+        test_probability_matrix
+        .mean(axis=1)
     )
 
     return {
 
-        "models": models,
+        "models":
+            models,
 
-        "imputer": imputer,
+        "imputer":
+            imputer,
 
-        "scaler": scaler,
+        "scaler":
+            scaler,
 
-        "feature_schema": feature_schema,
+        "feature_schema":
+            feature_schema,
 
-        "predictors": predictors,
+        "predictors":
+            predictors,
 
-        "conformal_q": conformal_q,
+        "conformal_q":
+            conformal_q,
 
         "conformal_confidence":
             CONFORMAL_CONFIDENCE,
@@ -875,7 +951,7 @@ def train_pipeline(
 
 
 # ==============================================================================
-# 12. INFERENCE
+# 13. INFERENCE
 # ==============================================================================
 
 def transform_for_inference(
@@ -945,21 +1021,24 @@ def predict_population(
             )[:, 1]
         )
 
-    probability_matrix = np.column_stack(
-        [
-            model_probabilities[name]
-            for name in EXPECTED_MODEL_ORDER
-        ]
-    )
-
-    ensemble_probability = (
-        probability_matrix.mean(
-            axis=1
+    probability_matrix = (
+        np.column_stack(
+            [
+                model_probabilities[name]
+                for name
+                in EXPECTED_MODEL_ORDER
+            ]
         )
     )
 
+    ensemble_probability = (
+        probability_matrix
+        .mean(axis=1)
+    )
+
     epistemic_std = (
-        probability_matrix.std(
+        probability_matrix
+        .std(
             axis=1,
             ddof=0,
         )
@@ -969,8 +1048,11 @@ def predict_population(
         [
             np.array(
                 [
-                    bernoulli_entropy(p)
-                    for p in model_probabilities[
+                    bernoulli_entropy(
+                        p
+                    )
+                    for p
+                    in model_probabilities[
                         model_name
                     ]
                 ]
@@ -984,8 +1066,11 @@ def predict_population(
 
     predictive_entropy = np.array(
         [
-            bernoulli_entropy(p)
-            for p in ensemble_probability
+            bernoulli_entropy(
+                p
+            )
+            for p
+            in ensemble_probability
         ]
     )
 
@@ -1012,7 +1097,9 @@ def predict_population(
     )
 
     conformal_q = float(
-        pipeline["conformal_q"]
+        pipeline[
+            "conformal_q"
+        ]
     )
 
     conformal_safe = (
@@ -1067,7 +1154,7 @@ def predict_population(
 
 
 # ==============================================================================
-# 13. PERFORMANCE METRICS
+# 14. PERFORMANCE METRICS
 # ==============================================================================
 
 def calculate_metrics(
@@ -1077,8 +1164,9 @@ def calculate_metrics(
 ) -> Dict[str, Any]:
 
     y_true_array = (
-        np.asarray(y_true)
-        .astype(int)
+        np.asarray(
+            y_true
+        ).astype(int)
     )
 
     probabilities = np.asarray(
@@ -1091,11 +1179,13 @@ def calculate_metrics(
         >= threshold
     ).astype(int)
 
-    tn, fp, fn, tp = confusion_matrix(
-        y_true_array,
-        predictions,
-        labels=[0, 1],
-    ).ravel()
+    tn, fp, fn, tp = (
+        confusion_matrix(
+            y_true_array,
+            predictions,
+            labels=[0, 1],
+        ).ravel()
+    )
 
     sensitivity = (
         tp / (tp + fn)
@@ -1256,15 +1346,15 @@ def build_performance_table(
             }
         )
 
-    ensemble_probability = np.mean(
+    ensemble_probability = (
         np.column_stack(
             [
                 probability_dict[name]
                 for name
                 in EXPECTED_MODEL_ORDER
             ]
-        ),
-        axis=1,
+        )
+        .mean(axis=1)
     )
 
     metrics = calculate_metrics(
@@ -1304,11 +1394,13 @@ def build_performance_table(
         }
     )
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(
+        rows
+    )
 
 
 # ==============================================================================
-# 14. CONFORMAL TEST COVERAGE
+# 15. CONFORMAL TEST COVERAGE
 # ==============================================================================
 
 def conformal_test_summary(
@@ -1318,8 +1410,9 @@ def conformal_test_summary(
 ) -> Dict[str, Any]:
 
     y_array = (
-        np.asarray(y_true)
-        .astype(int)
+        np.asarray(
+            y_true
+        ).astype(int)
     )
 
     p = np.asarray(
@@ -1339,14 +1432,17 @@ def conformal_test_summary(
     )
 
     covered = (
-        nonconformity <= q
+        nonconformity
+        <= q
     )
 
     return {
 
         "coverage":
             float(
-                np.mean(covered)
+                np.mean(
+                    covered
+                )
             ),
 
         "target_confidence":
@@ -1366,14 +1462,16 @@ def conformal_test_summary(
 
 
 # ==============================================================================
-# 15. FAIRNESS ANALYSIS
+# 16. FAIRNESS ANALYSIS
 # ==============================================================================
 
 def age_group(
     age: Any,
 ) -> Optional[str]:
 
-    value = safe_float(age)
+    value = safe_float(
+        age
+    )
 
     if not np.isfinite(value):
         return None
@@ -1416,10 +1514,12 @@ def fairness_analysis(
         index=df.index,
     )
 
-    working["Age_Group"] = (
-        working["Age"].apply(
-            age_group
-        )
+    working[
+        "Age_Group"
+    ] = working[
+        "Age"
+    ].apply(
+        age_group
     )
 
     # --------------------------------------------------------------------------
@@ -1431,16 +1531,23 @@ def fairness_analysis(
     for group, group_df in (
         working
         .dropna(
-            subset=["Age_Group"]
+            subset=[
+                "Age_Group"
+            ]
         )
         .groupby(
             "Age_Group"
         )
     ):
 
-        n = len(group_df)
+        n = len(
+            group_df
+        )
 
-        if n < MIN_FAIRNESS_GROUP_SIZE:
+        if (
+            n
+            < MIN_FAIRNESS_GROUP_SIZE
+        ):
 
             selection_rate = np.nan
 
@@ -1466,12 +1573,14 @@ def fairness_analysis(
             }
         )
 
-    selection_table = pd.DataFrame(
-        selection_rows
+    selection_table = (
+        pd.DataFrame(
+            selection_rows
+        )
     )
 
     # --------------------------------------------------------------------------
-    # FPR requires ground truth
+    # FPR
     # --------------------------------------------------------------------------
 
     ground_truth = (
@@ -1482,9 +1591,13 @@ def fairness_analysis(
         )
     )
 
-    fpr_working = working.copy()
+    fpr_working = (
+        working.copy()
+    )
 
-    fpr_working["Truth"] = ground_truth
+    fpr_working[
+        "Truth"
+    ] = ground_truth
 
     fpr_rows = []
 
@@ -1501,14 +1614,21 @@ def fairness_analysis(
         )
     ):
 
-        n = len(group_df)
+        n = len(
+            group_df
+        )
 
-        negatives = group_df[
-            group_df["Truth"] == 0
-        ]
+        negatives = (
+            group_df[
+                group_df[
+                    "Truth"
+                ] == 0
+            ]
+        )
 
         if (
-            n < MIN_FAIRNESS_GROUP_SIZE
+            n
+            < MIN_FAIRNESS_GROUP_SIZE
             or len(negatives) == 0
         ):
 
@@ -1553,7 +1673,7 @@ def fairness_analysis(
 
 
 # ==============================================================================
-# 16. BMI PSI
+# 17. BMI PSI
 # ==============================================================================
 
 def calculate_bmi_psi(
@@ -1581,11 +1701,15 @@ def calculate_bmi_psi(
     )
 
     baseline = baseline[
-        np.isfinite(baseline)
+        np.isfinite(
+            baseline
+        )
     ]
 
     current = current[
-        np.isfinite(current)
+        np.isfinite(
+            current
+        )
     ]
 
     if (
@@ -1688,7 +1812,7 @@ def calculate_bmi_psi(
 
 
 # ==============================================================================
-# 17. XAI FEATURE CONTRIBUTIONS
+# 18. XAI FEATURE CONTRIBUTIONS
 # ==============================================================================
 
 def aggregate_feature_contributions(
@@ -1707,7 +1831,9 @@ def aggregate_feature_contributions(
 
     rf = pipeline[
         "models"
-    ]["Random Forest"]
+    ][
+        "Random Forest"
+    ]
 
     rf_values = np.asarray(
         rf.feature_importances_,
@@ -1735,7 +1861,9 @@ def aggregate_feature_contributions(
 
     xgb = pipeline[
         "models"
-    ]["XGBoost"]
+    ][
+        "XGBoost"
+    ]
 
     xgb_values = np.asarray(
         xgb.feature_importances_,
@@ -1763,7 +1891,9 @@ def aggregate_feature_contributions(
 
     lr = pipeline[
         "models"
-    ]["Logistic Regression"]
+    ][
+        "Logistic Regression"
+    ]
 
     lr_values = np.abs(
         np.asarray(
@@ -1798,10 +1928,6 @@ def aggregate_feature_contributions(
         axis=1
     )
 
-    # --------------------------------------------------------------------------
-    # Aggregate one-hot encoded variables
-    # --------------------------------------------------------------------------
-
     predictors = pipeline[
         "predictors"
     ]
@@ -1812,7 +1938,10 @@ def aggregate_feature_contributions(
 
         matching_columns = [
             column
-            for column in schema
+
+            for column
+            in schema
+
             if (
                 column == predictor
                 or column.startswith(
@@ -1876,7 +2005,24 @@ def aggregate_feature_contributions(
 
 
 # ==============================================================================
-# 18. APPLICATION HEADER
+# 19. SESSION STATE
+# ==============================================================================
+
+if "pipeline" not in st.session_state:
+
+    st.session_state.pipeline = None
+
+if "predictions" not in st.session_state:
+
+    st.session_state.predictions = None
+
+if "data_signature" not in st.session_state:
+
+    st.session_state.data_signature = None
+
+
+# ==============================================================================
+# 20. APPLICATION HEADER
 # ==============================================================================
 
 st.title(
@@ -1903,7 +2049,7 @@ st.warning(
 
 
 # ==============================================================================
-# 19. SIDEBAR
+# 21. SIDEBAR
 # ==============================================================================
 
 with st.sidebar:
@@ -1948,7 +2094,7 @@ with st.sidebar:
 
 
 # ==============================================================================
-# 20. FILE UPLOAD
+# 22. EXCEL UPLOAD
 # ==============================================================================
 
 st.header(
@@ -1974,11 +2120,12 @@ uploaded_file = st.file_uploader(
 
 
 # ==============================================================================
-# 21. DEFAULT DATASET
+# 23. READ DATA
 # ==============================================================================
 
-DEFAULT_DATASET = "dataCBGS_dataset.xlsx"
-
+DEFAULT_DATASET = (
+    "dataCBGS_dataset.xlsx"
+)
 
 if uploaded_file is not None:
 
@@ -1998,7 +2145,9 @@ if uploaded_file is not None:
             "The uploaded Excel file could not be read."
         )
 
-        st.exception(exc)
+        st.exception(
+            exc
+        )
 
         st.stop()
 
@@ -2034,23 +2183,27 @@ else:
             "The repository dataset could not be read."
         )
 
-        st.exception(exc)
+        st.exception(
+            exc
+        )
 
         st.stop()
 
 
 # ==============================================================================
-# 22. DATASET VALIDATION
+# 24. VALIDATE DATASET
 # ==============================================================================
 
 valid_dataset, validation_errors = (
-    validate_dataset(df)
+    validate_dataset(
+        df
+    )
 )
 
 if not valid_dataset:
 
     st.error(
-        "The uploaded dataset does not satisfy "
+        "The supplied dataset does not satisfy "
         "the SafeTriage-GDM input requirements."
     )
 
@@ -2063,13 +2216,23 @@ if not valid_dataset:
     st.stop()
 
 
+# ==============================================================================
+# 25. DATASET SUMMARY
+# ==============================================================================
+
 available_predictors = (
-    get_available_predictors(df)
+    get_available_predictors(
+        df
+    )
 )
 
-target = prepare_target(df)
+target = prepare_target(
+    df
+)
 
-n_total = len(df)
+n_total = len(
+    df
+)
 
 n_labeled = int(
     target.notna().sum()
@@ -2087,10 +2250,9 @@ n_negative = int(
     (target == 0).sum()
 )
 
-
-# ==============================================================================
-# 23. DATASET SUMMARY
-# ==============================================================================
+st.write(
+    f"**Data source:** {data_source}"
+)
 
 col1, col2, col3, col4 = st.columns(4)
 
@@ -2123,10 +2285,6 @@ with col4:
     )
 
 st.caption(
-    f"Data source: {data_source}"
-)
-
-st.caption(
     "All uploaded rows remain available for inference. "
     "Only observations with valid GDM ground truth are used "
     "for supervised training and evaluation."
@@ -2134,31 +2292,18 @@ st.caption(
 
 
 # ==============================================================================
-# 24. TRAIN PIPELINE
+# 26. DETECT DATASET CHANGES
 # ==============================================================================
 
-if "pipeline" not in st.session_state:
-
-    st.session_state.pipeline = None
-
-if "predictions" not in st.session_state:
-
-    st.session_state.predictions = None
-
-
-# If the user uploads a new file during the same session, retrain.
-current_data_signature = (
-    f"{n_total}_"
-    f"{list(df.columns)}_"
-    f"{data_source}"
+current_signature = (
+    dataframe_signature(
+        df
+    )
 )
 
 if (
-    "data_signature"
-    not in st.session_state
-    or
     st.session_state.data_signature
-    != current_data_signature
+    != current_signature
 ):
 
     st.session_state.pipeline = None
@@ -2166,9 +2311,13 @@ if (
     st.session_state.predictions = None
 
     st.session_state.data_signature = (
-        current_data_signature
+        current_signature
     )
 
+
+# ==============================================================================
+# 27. TRAIN PIPELINE
+# ==============================================================================
 
 if st.session_state.pipeline is None:
 
@@ -2192,10 +2341,12 @@ if st.session_state.pipeline is None:
                 "SafeTriage-GDM could not train on this dataset."
             )
 
-            st.exception(exc)
+            st.exception(
+                exc
+            )
 
             st.info(
-                "Please verify that the uploaded Excel file contains "
+                "Please verify that the Excel file contains "
                 "the required GDM target and compatible predictor fields."
             )
 
@@ -2208,7 +2359,7 @@ pipeline = (
 
 
 # ==============================================================================
-# 25. POPULATION PREDICTIONS
+# 28. GENERATE POPULATION PREDICTIONS
 # ==============================================================================
 
 if st.session_state.predictions is None:
@@ -2230,7 +2381,9 @@ if st.session_state.predictions is None:
             "Population inference failed."
         )
 
-        st.exception(exc)
+        st.exception(
+            exc
+        )
 
         st.stop()
 
@@ -2240,10 +2393,6 @@ predictions = (
 )
 
 
-# ==============================================================================
-# 26. SUCCESS MESSAGE
-# ==============================================================================
-
 st.success(
     "SafeTriage-GDM pipeline successfully initialised "
     "for the supplied dataset."
@@ -2251,7 +2400,7 @@ st.success(
 
 
 # ==============================================================================
-# 27. MAIN TABS
+# 29. MAIN TABS
 # ==============================================================================
 
 (
@@ -2282,21 +2431,25 @@ with tab_triage:
     )
 
     st.write(
-        "Select an observation from the uploaded dataset to inspect "
+        "Select an observation from the supplied dataset to inspect "
         "its ensemble GDM risk, model agreement, uncertainty, and "
         "conformal safety status."
     )
 
     patient_index = st.selectbox(
         "Select observation",
-        options=list(df.index),
+        options=list(
+            df.index
+        ),
         format_func=lambda x:
             f"Observation {x + 1}",
     )
 
-    patient_prediction = predictions.loc[
-        patient_index
-    ]
+    patient_prediction = (
+        predictions.loc[
+            patient_index
+        ]
+    )
 
     probability = float(
         patient_prediction[
@@ -2474,9 +2627,11 @@ with tab_performance:
         "y_test"
     ]
 
-    test_probability_dict = pipeline[
-        "test_probabilities"
-    ]
+    test_probability_dict = (
+        pipeline[
+            "test_probabilities"
+        ]
+    )
 
     performance_table = (
         build_performance_table(
@@ -2501,18 +2656,24 @@ with tab_performance:
         ]
     )
 
-    ensemble_metrics = calculate_metrics(
-        y_test,
-        ensemble_test_probability,
+    ensemble_metrics = (
+        calculate_metrics(
+            y_test,
+            ensemble_test_probability,
+        )
     )
 
     st.subheader(
         "Ensemble Metrics"
     )
 
-    columns = st.columns(5)
+    # --------------------------------------------------------------------------
+    # MOBILE-FRIENDLY METRIC LAYOUT
+    # --------------------------------------------------------------------------
 
-    columns[0].metric(
+    row1 = st.columns(3)
+
+    row1[0].metric(
         "ROC-AUC",
         format_metric(
             ensemble_metrics[
@@ -2521,7 +2682,7 @@ with tab_performance:
         ),
     )
 
-    columns[1].metric(
+    row1[1].metric(
         "PR-AUC",
         format_metric(
             ensemble_metrics[
@@ -2530,8 +2691,8 @@ with tab_performance:
         ),
     )
 
-    columns[2].metric(
-        "Brier",
+    row1[2].metric(
+        "Brier Score",
         format_metric(
             ensemble_metrics[
                 "Brier Score"
@@ -2539,7 +2700,9 @@ with tab_performance:
         ),
     )
 
-    columns[3].metric(
+    row2 = st.columns(3)
+
+    row2[0].metric(
         "Sensitivity",
         format_pct(
             ensemble_metrics[
@@ -2548,11 +2711,20 @@ with tab_performance:
         ),
     )
 
-    columns[4].metric(
+    row2[1].metric(
         "Specificity",
         format_pct(
             ensemble_metrics[
                 "Specificity"
+            ]
+        ),
+    )
+
+    row2[2].metric(
+        "F1 Score",
+        format_metric(
+            ensemble_metrics[
+                "F1"
             ]
         ),
     )
@@ -2564,12 +2736,20 @@ with tab_performance:
     confusion_df = pd.DataFrame(
         [
             [
-                ensemble_metrics["TN"],
-                ensemble_metrics["FP"],
+                ensemble_metrics[
+                    "TN"
+                ],
+                ensemble_metrics[
+                    "FP"
+                ],
             ],
             [
-                ensemble_metrics["FN"],
-                ensemble_metrics["TP"],
+                ensemble_metrics[
+                    "FN"
+                ],
+                ensemble_metrics[
+                    "TP"
+                ],
             ],
         ],
         index=[
@@ -2588,7 +2768,7 @@ with tab_performance:
     )
 
     # --------------------------------------------------------------------------
-    # ROC
+    # ROC CURVE
     # --------------------------------------------------------------------------
 
     st.subheader(
@@ -2598,14 +2778,19 @@ with tab_performance:
     try:
 
         fpr, tpr, _ = roc_curve(
-            np.asarray(y_test).astype(int),
+            np.asarray(
+                y_test
+            ).astype(int),
             ensemble_test_probability,
         )
 
         roc_df = pd.DataFrame(
             {
-                "False Positive Rate": fpr,
-                "True Positive Rate": tpr,
+                "False Positive Rate":
+                    fpr,
+
+                "True Positive Rate":
+                    tpr,
             }
         )
 
@@ -2623,7 +2808,7 @@ with tab_performance:
         )
 
     # --------------------------------------------------------------------------
-    # Precision-Recall
+    # PRECISION-RECALL CURVE
     # --------------------------------------------------------------------------
 
     st.subheader(
@@ -2634,15 +2819,20 @@ with tab_performance:
 
         precision, recall, _ = (
             precision_recall_curve(
-                np.asarray(y_test).astype(int),
+                np.asarray(
+                    y_test
+                ).astype(int),
                 ensemble_test_probability,
             )
         )
 
         pr_df = pd.DataFrame(
             {
-                "Recall": recall,
-                "Precision": precision,
+                "Recall":
+                    recall,
+
+                "Precision":
+                    precision,
             }
         )
 
@@ -2660,7 +2850,7 @@ with tab_performance:
         )
 
     # --------------------------------------------------------------------------
-    # Calibration curve
+    # CALIBRATION CURVE
     # --------------------------------------------------------------------------
 
     st.subheader(
@@ -2728,7 +2918,9 @@ with tab_uncertainty:
 
     conformal_summary = (
         conformal_test_summary(
-            pipeline["y_test"],
+            pipeline[
+                "y_test"
+            ],
             pipeline[
                 "ensemble_test_probability"
             ],
@@ -2742,7 +2934,9 @@ with tab_uncertainty:
 
         st.metric(
             "Conformal q",
-            format_metric(q),
+            format_metric(
+                q
+            ),
         )
 
     with col2:
@@ -2795,7 +2989,9 @@ with tab_uncertainty:
     ]
 
     st.dataframe(
-        uncertainty_df.head(100).round(4),
+        uncertainty_df
+        .head(100)
+        .round(4),
         width="stretch",
     )
 
@@ -2866,7 +3062,9 @@ with tab_fairness:
             .dropna()
         )
 
-        if len(valid_selection) >= 2:
+        if len(
+            valid_selection
+        ) >= 2:
 
             selection_disparity = (
                 valid_selection.max()
@@ -2905,7 +3103,9 @@ with tab_fairness:
             .dropna()
         )
 
-        if len(valid_fpr) >= 2:
+        if len(
+            valid_fpr
+        ) >= 2:
 
             fpr_disparity = (
                 valid_fpr.max()
@@ -2937,7 +3137,9 @@ with tab_fairness:
         df,
     )
 
-    if np.isfinite(psi):
+    if np.isfinite(
+        psi
+    ):
 
         col1, col2 = st.columns(2)
 
@@ -2945,12 +3147,17 @@ with tab_fairness:
 
             st.metric(
                 "BMI PSI",
-                format_metric(psi),
+                format_metric(
+                    psi
+                ),
             )
 
         with col2:
 
-            if psi >= BMI_PSI_THRESHOLD:
+            if (
+                psi
+                >= BMI_PSI_THRESHOLD
+            ):
 
                 st.error(
                     "Population-shift warning: BMI distribution "
@@ -3014,7 +3221,9 @@ with tab_xai:
 
         maximum_features = min(
             15,
-            len(contribution_table),
+            len(
+                contribution_table
+            ),
         )
 
         default_features = min(
@@ -3031,7 +3240,9 @@ with tab_xai:
 
         plot_df = (
             contribution_table
-            .head(top_n)
+            .head(
+                top_n
+            )
             .sort_values(
                 "Mean Contribution",
                 ascending=True,
@@ -3057,7 +3268,9 @@ with tab_xai:
 
         st.dataframe(
             contribution_table
-            .head(top_n)
+            .head(
+                top_n
+            )
             .round(4),
             width="stretch",
             hide_index=True,
@@ -3071,7 +3284,7 @@ with tab_xai:
 
 
 # ==============================================================================
-# 28. PIPELINE DIAGNOSTICS
+# 30. PIPELINE DIAGNOSTICS
 # ==============================================================================
 
 with st.expander(
@@ -3081,6 +3294,11 @@ with st.expander(
     st.write(
         "**Data source:**",
         data_source,
+    )
+
+    st.write(
+        "**Dataset signature:**",
+        current_signature[:16] + "...",
     )
 
     st.write(
@@ -3095,23 +3313,31 @@ with st.expander(
 
     st.write(
         "**Training rows:**",
-        pipeline["train_size"],
+        pipeline[
+            "train_size"
+        ],
     )
 
     st.write(
         "**Calibration rows:**",
-        pipeline["calibration_size"],
+        pipeline[
+            "calibration_size"
+        ],
     )
 
     st.write(
         "**Test rows:**",
-        pipeline["test_size"],
+        pipeline[
+            "test_size"
+        ],
     )
 
     st.write(
         "**Approved predictor count:**",
         len(
-            pipeline["predictors"]
+            pipeline[
+                "predictors"
+            ]
         ),
     )
 
@@ -3160,7 +3386,7 @@ with st.expander(
 
 
 # ==============================================================================
-# 29. FOOTER
+# 31. FOOTER
 # ==============================================================================
 
 st.divider()
