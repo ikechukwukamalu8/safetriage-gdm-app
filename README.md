@@ -10,26 +10,11 @@ SafeTriage-GDM is a research-oriented Streamlit application for uncertainty-awar
 
 ---
 
-## What's new in this version
+# Predictor schema
 
-The predictor schema has been tightened after auditing the actual Cambridge Baby Growth Study (CBGS) dataset used in the research workflow.
+The application uses a parsimonious set of **10 approved antepartum predictors**. Predictor selection is based on the available CBGS data structure and leakage-aware modelling considerations.
 
-### Predictor reduction: 14 → 10
 
-Four variables were removed for defensible methodological reasons:
-
-1. **Maternal height** — removed because pre-pregnancy BMI already encodes height together with pre-pregnancy weight.
-2. **Pre-pregnancy weight** — removed for the same redundancy reason.
-3. **Multiple-micronutrient data availability** — removed because the CBGS dataset contains `Yes` for all 970 observations (100%); the variable has zero variance.
-4. **Twin pregnancy** — removed because the CBGS dataset contains `No` for all 970 observations (100%); the variable has zero variance.
-
-The resulting model starts from a cleaner set of **10 approved predictors**.
-
-> Removing redundant or constant predictors is intended to improve parsimony, numerical stability, and interpretability. It does **not** guarantee higher test-set AUC or other performance metrics. Final performance must be evaluated on the untouched test partition.
-
----
-
-# Approved 10-predictor schema
 
 The current application uses only the following antepartum predictors:
 
@@ -136,7 +121,9 @@ Synthetic external-validation demonstration dataset.
 - Canonical CBGS-style predictor names
 - Synthetic observations only
 
-Use it to demonstrate external validation, inference, dataset mapping, conformal prediction, uncertainty estimation, and export.
+Use it to demonstrate external validation, inference, dataset mapping, conformal prediction, uncertainty estimation, fairness monitoring, BMI population-stability monitoring, and export.
+
+The supplementation start/stop variables are represented as **numeric weeks relative to the start of pregnancy**, matching the data type used by the CBGS reference dataset.
 
 ## 2. SafeTriage_GDM_external_renamed_schema_test.xlsx
 
@@ -158,7 +145,7 @@ parity
 gdm_status
 ```
 
-It contains 1,100 rows, with 1,000 labeled and 100 unlabeled observations.
+It contains 1,100 rows, with 1,000 labeled and 100 unlabeled observations. The supplementation start/stop variables are numeric week values rather than trimester labels so that they are compatible with the reference preprocessing schema.
 
 ## 3. SafeTriage_GDM_fairness_psi_stress_test.xlsx
 
@@ -194,6 +181,33 @@ Do not upload:
 - Other direct identifiers
 
 ---
+
+# External validation workflow
+
+External Validation is intended to evaluate a dataset against a frozen reference model. The workflow is:
+
+```text
+Reference/development dataset
+        │
+        ▼
+Train + calibration + reference test
+        │
+        ▼
+Frozen preprocessing + models
+        │
+        ├── Frozen decision threshold
+        └── Reference conformal calibration
+                 │
+                 ▼
+        Independent external dataset
+                 │
+                 ▼
+          External predictions
+```
+
+To use this mode, upload the dataset used to develop the reference model first (for example, a permitted copy of the CBGS research dataset), and then upload the independent external dataset. The external dataset is not used to retrain, rebalance, optimize the decision threshold, or recalibrate the conformal layer.
+
+The public synthetic datasets are intended to demonstrate this workflow; they are not replacement training data for the CBGS research analysis.
 
 # Methodological architecture
 
@@ -639,9 +653,9 @@ The principal objective of SafeTriage-GDM is not to maximize a single performanc
 - population-shift monitoring; and
 - model explainability.
 
-The reduction to 10 predictors makes the deployed schema more parsimonious and removes two demonstrably constant variables plus two variables mathematically redundant with BMI.
+The deployed schema is designed to be parsimonious and avoids constant variables and variables that are mathematically redundant with BMI.
 
-Any improvement or deterioration in predictive performance should be reported from the **new untouched test evaluation**, rather than assumed from the predictor reduction alone.
+Predictive performance should be interpreted from the **untouched test evaluation**, rather than assumed from predictor selection alone.
 
 ---
 

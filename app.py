@@ -1803,6 +1803,37 @@ def read_excel_upload(uploaded_file) -> pd.DataFrame:
     return clean_dataframe(pd.read_excel(io.BytesIO(uploaded_file.getvalue())))
 
 
+def align_external_feature_types(
+    X_external: pd.DataFrame,
+    X_reference: pd.DataFrame,
+) -> pd.DataFrame:
+    """Align external feature dtypes with the reference model's training schema.
+
+    The CBGS source contains numeric week values for the supplementation timing
+    variables. External datasets must therefore provide compatible numeric values
+    for those canonical variables. Numeric columns are safely coerced to numeric;
+    categorical columns are converted to object/string-compatible values.
+    Values that cannot be converted to a required numeric type become missing and
+    are subsequently handled by the frozen training imputer.
+    """
+    X = X_external.copy()
+
+    for column in X.columns:
+        reference_dtype = X_reference[column].dtype
+
+        if pd.api.types.is_numeric_dtype(reference_dtype):
+            if not pd.api.types.is_numeric_dtype(X[column]):
+                X[column] = pd.to_numeric(X[column], errors="coerce")
+            else:
+                X[column] = pd.to_numeric(X[column], errors="coerce")
+        else:
+            # Preserve missing values while making categorical/text columns
+            # compatible with the fitted categorical pipeline.
+            X[column] = X[column].astype("object")
+
+    return X
+
+
 def run_external_validation_mode():
     """Develop a reference model once and evaluate it on an independent dataset."""
 
@@ -1981,9 +2012,35 @@ def run_external_validation_mode():
     )
 
     # External data are transformed by the already-fitted reference preprocessor.
-    external_processed = preprocessor.transform(
-        external_df[APPROVED_PREDICTORS]
+    # Align dtypes first because the CBGS reference dataset stores the
+    # supplementation timing variables as numeric weeks relative to pregnancy
+    # start. This prevents strings in an external workbook from being passed
+    # into the reference IterativeImputer.
+    external_features = align_external_feature_types(
+        external_df[APPROVED_PREDICTORS],
+        X_train,
     )
+
+    try:
+        external_processed = preprocessor.transform(external_features)
+    except (TypeError, ValueError) as exc:
+        st.error(
+            "The external dataset could not be transformed using the frozen "
+            "reference preprocessing schema. Check that numeric predictors "
+            "(including supplementation timing in weeks) contain numeric "
+            "values and that categorical predictors use compatible values."
+        )
+        with st.expander("Technical diagnostic", expanded=False):
+            st.write("Reference predictor dtypes:")
+            st.dataframe(
+                pd.DataFrame({"Reference dtype": X_train[APPROVED_PREDICTORS].dtypes.astype(str)})
+            )
+            st.write("External predictor dtypes after alignment:")
+            st.dataframe(
+                pd.DataFrame({"External dtype": external_features.dtypes.astype(str)})
+            )
+            st.exception(exc)
+        st.stop()
     external_probabilities = {
         model_name: fitted_models[model_name].predict_proba(external_processed)[:, 1]
         for model_name in EXPECTED_MODEL_ORDER
