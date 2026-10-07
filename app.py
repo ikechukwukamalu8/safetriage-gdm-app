@@ -28,6 +28,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
 import streamlit as st
+import matplotlib.pyplot as plt
 
 from sklearn.experimental import enable_iterative_imputer  # noqa: F401
 from sklearn.impute import IterativeImputer, SimpleImputer
@@ -44,6 +45,8 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
     average_precision_score,
+    roc_curve,
+    precision_recall_curve,
 )
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
@@ -1405,6 +1408,213 @@ def aggregate_feature_importance(
 
 
 # ==============================================================================
+# VISUALIZATION HELPERS
+# ==============================================================================
+
+
+def style_axis(ax, title=None, xlabel=None, ylabel=None):
+    if title:
+        ax.set_title(title, fontsize=12, fontweight="bold")
+    if xlabel:
+        ax.set_xlabel(xlabel)
+    if ylabel:
+        ax.set_ylabel(ylabel)
+    ax.grid(alpha=0.20, linestyle="--", linewidth=0.7)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+
+def plot_outcome_distribution(y):
+    counts = pd.Series(y).map({0: "No GDM", 1: "GDM"}).value_counts()
+    counts = counts.reindex(["No GDM", "GDM"], fill_value=0)
+    fig, ax = plt.subplots(figsize=(7, 4))
+    bars = ax.bar(counts.index, counts.values)
+    ax.bar_label(bars, fmt="%d", padding=3)
+    style_axis(ax, "Known GDM outcome distribution", "Outcome", "Number of observations")
+    ax.set_ylim(0, max(counts.values) * 1.15 if len(counts) else 1)
+    fig.tight_layout()
+    return fig
+
+
+def plot_split_distribution(y_train, y_calibration, y_test):
+    parts = [("Training", y_train), ("Calibration", y_calibration), ("Test", y_test)]
+    no_gdm = [int((y == 0).sum()) for _, y in parts]
+    gdm = [int((y == 1).sum()) for _, y in parts]
+    x = np.arange(len(parts))
+    width = 0.36
+    fig, ax = plt.subplots(figsize=(8, 4))
+    b1 = ax.bar(x - width / 2, no_gdm, width, label="No GDM")
+    b2 = ax.bar(x + width / 2, gdm, width, label="GDM")
+    ax.bar_label(b1, fmt="%d", padding=2, fontsize=8)
+    ax.bar_label(b2, fmt="%d", padding=2, fontsize=8)
+    ax.set_xticks(x, [name for name, _ in parts])
+    style_axis(ax, "Outcome counts by data partition", "Partition", "Number of observations")
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    return fig
+
+
+def plot_threshold_selection(threshold_table, selected_threshold):
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.plot(threshold_table["threshold"], threshold_table["sensitivity"], label="Sensitivity")
+    ax.plot(threshold_table["threshold"], threshold_table["specificity"], label="Specificity")
+    ax.plot(threshold_table["threshold"], threshold_table["balanced_accuracy"], label="Balanced accuracy", linewidth=2)
+    ax.axvline(selected_threshold, linestyle="--", linewidth=1.5, label=f"Selected threshold = {selected_threshold:.3f}")
+    style_axis(ax, "Calibration-derived threshold selection", "Decision threshold", "Metric")
+    ax.set_ylim(0, 1.05)
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    return fig
+
+
+def plot_roc_curves(y_true, model_probabilities, ensemble_probability):
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for model_name in EXPECTED_MODEL_ORDER:
+        fpr, tpr, _ = roc_curve(y_true, model_probabilities[model_name])
+        auc_value = roc_auc_score(y_true, model_probabilities[model_name])
+        ax.plot(fpr, tpr, label=f"{model_name} (AUC={auc_value:.3f})")
+    fpr, tpr, _ = roc_curve(y_true, ensemble_probability)
+    ensemble_auc = roc_auc_score(y_true, ensemble_probability)
+    ax.plot(fpr, tpr, linewidth=2.5, label=f"Ensemble (AUC={ensemble_auc:.3f})")
+    ax.plot([0, 1], [0, 1], linestyle=":", linewidth=1)
+    style_axis(ax, "ROC curves on the untouched test set", "False-positive rate", "True-positive rate")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1.05)
+    ax.legend(frameon=False, fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def plot_pr_curves(y_true, model_probabilities, ensemble_probability):
+    prevalence = np.mean(np.asarray(y_true) == 1)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for model_name in EXPECTED_MODEL_ORDER:
+        precision, recall, _ = precision_recall_curve(y_true, model_probabilities[model_name])
+        ap = average_precision_score(y_true, model_probabilities[model_name])
+        ax.plot(recall, precision, label=f"{model_name} (AP={ap:.3f})")
+    precision, recall, _ = precision_recall_curve(y_true, ensemble_probability)
+    ap = average_precision_score(y_true, ensemble_probability)
+    ax.plot(recall, precision, linewidth=2.5, label=f"Ensemble (AP={ap:.3f})")
+    ax.axhline(prevalence, linestyle=":", linewidth=1, label=f"Prevalence baseline={prevalence:.3f}")
+    style_axis(ax, "Precision–recall curves on the untouched test set", "Recall", "Precision")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1.05)
+    ax.legend(frameon=False, fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def plot_confusion_matrix(y_true, predictions):
+    cm = confusion_matrix(y_true, predictions, labels=[0, 1])
+    fig, ax = plt.subplots(figsize=(5.5, 4.5))
+    image = ax.imshow(cm)
+    ax.set_xticks([0, 1], ["No GDM", "GDM"])
+    ax.set_yticks([0, 1], ["No GDM", "GDM"])
+    ax.set_xlabel("Predicted")
+    ax.set_ylabel("Actual")
+    ax.set_title("Ensemble confusion matrix", fontsize=12, fontweight="bold")
+    for i in range(2):
+        for j in range(2):
+            ax.text(j, i, f"{cm[i, j]:,}", ha="center", va="center", fontsize=13)
+    fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    return fig
+
+
+def plot_probability_distribution(y_true, probability, threshold):
+    y_true = np.asarray(y_true).astype(int)
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    ax.hist(probability[y_true == 0], bins=20, alpha=0.60, label="Observed No GDM", density=True)
+    ax.hist(probability[y_true == 1], bins=20, alpha=0.60, label="Observed GDM", density=True)
+    ax.axvline(threshold, linestyle="--", linewidth=1.5, label=f"Threshold={threshold:.3f}")
+    style_axis(ax, "Ensemble predicted GDM probability", "Predicted P(GDM)", "Density")
+    ax.set_xlim(0, 1)
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    return fig
+
+
+def plot_conformal_distribution(conformal_sets):
+    counts = pd.Series(conformal_sets).value_counts()
+    order = ["{No GDM}", "{GDM, No GDM}", "{GDM}", "{Uncertain}"]
+    counts = counts.reindex(order, fill_value=0)
+    fig, ax = plt.subplots(figsize=(8, 4))
+    bars = ax.bar(counts.index, counts.values)
+    ax.bar_label(bars, fmt="%d", padding=3)
+    style_axis(ax, "90% conformal prediction sets", "Prediction set", "Number of observations")
+    ax.tick_params(axis="x", rotation=10)
+    fig.tight_layout()
+    return fig
+
+
+def plot_uncertainty_distributions(uncertainty, conformal_sets):
+    labels = np.asarray(conformal_sets)
+    metrics = [
+        ("epistemic_uncertainty", "Epistemic uncertainty"),
+        ("aleatoric_uncertainty", "Aleatoric uncertainty"),
+        ("predictive_entropy", "Predictive entropy"),
+    ]
+    fig, axes = plt.subplots(1, 3, figsize=(13, 4))
+    for ax, (key, title) in zip(axes, metrics):
+        for label in ["{No GDM}", "{GDM, No GDM}", "{GDM}"]:
+            values = uncertainty[key][labels == label]
+            if len(values):
+                ax.hist(values, bins=15, alpha=0.45, label=label)
+        style_axis(ax, title, "Value", "Count")
+    axes[-1].legend(frameon=False, fontsize=7)
+    fig.tight_layout()
+    return fig
+
+
+def plot_fairness_rates(fairness):
+    if fairness.empty:
+        return None
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+    x = np.arange(len(fairness))
+    width = 0.65
+    selection = fairness["Selection rate"]
+    b1 = axes[0].bar(x, selection.fillna(0), width)
+    axes[0].bar_label(b1, labels=[f"{v:.2f}" if pd.notna(v) else "NA" for v in selection], padding=2, fontsize=8)
+    axes[0].set_xticks(x, fairness["Age group"])
+    axes[0].set_ylim(0, 1)
+    style_axis(axes[0], "Selection rate by age group", "Age group", "Selection rate")
+    fpr = fairness["False-positive rate"]
+    b2 = axes[1].bar(x, fpr.fillna(0), width)
+    axes[1].bar_label(b2, labels=[f"{v:.2f}" if pd.notna(v) else "NA" for v in fpr], padding=2, fontsize=8)
+    axes[1].set_xticks(x, fairness["Age group"])
+    axes[1].set_ylim(0, 1)
+    style_axis(axes[1], "False-positive rate by age group", "Age group", "False-positive rate")
+    fig.tight_layout()
+    return fig
+
+
+def plot_bmi_distribution(reference, current):
+    reference = pd.to_numeric(reference, errors="coerce").dropna()
+    current = pd.to_numeric(current, errors="coerce").dropna()
+    if len(reference) == 0 or len(current) == 0:
+        return None
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    ax.hist(reference, bins=20, alpha=0.55, label="Training reference BMI", density=True)
+    ax.hist(current, bins=20, alpha=0.55, label="Current uploaded BMI", density=True)
+    style_axis(ax, "BMI distribution: training reference vs current data", "Pre-pregnancy BMI (kg/m²)", "Density")
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    return fig
+
+
+def plot_feature_importance(feature_importance, top_n=15):
+    if feature_importance.empty:
+        return None
+    data = feature_importance.head(top_n).sort_values("importance", ascending=True)
+    fig, ax = plt.subplots(figsize=(9, 6))
+    bars = ax.barh(data["original_variable"], data["importance"])
+    ax.bar_label(bars, fmt="%.3f", padding=3, fontsize=8)
+    style_axis(ax, f"Top {min(top_n, len(data))} aggregated model features", "Mean model importance", "")
+    fig.tight_layout()
+    return fig
+
+
+# ==============================================================================
 # DATA UPLOAD
 # ==============================================================================
 
@@ -1601,6 +1811,9 @@ st.dataframe(
     hide_index=True,
 )
 
+with st.expander("Visualize outcome distribution", expanded=True):
+    st.pyplot(plot_outcome_distribution(y_labeled), use_container_width=True)
+
 
 if y_labeled.nunique() < 2:
 
@@ -1690,6 +1903,9 @@ st.caption(
     "The test partition remains untouched and naturally imbalanced. "
     "ROSE-style balancing is applied only to training data."
 )
+
+with st.expander("Visualize partition class distributions", expanded=False):
+    st.pyplot(plot_split_distribution(y_train, y_calibration, y_test), use_container_width=True)
 
 
 # ==============================================================================
@@ -1842,6 +2058,9 @@ st.caption(
     "The test partition is not used to choose the threshold."
 )
 
+with st.expander("Visualize threshold selection", expanded=True):
+    st.pyplot(plot_threshold_selection(threshold_table, threshold), use_container_width=True)
+
 
 # ==============================================================================
 # TEST METRICS
@@ -1968,6 +2187,17 @@ st.dataframe(
     hide_index=True,
 )
 
+with st.expander("ROC and precision–recall curves", expanded=True):
+    curve_probabilities = {
+        name: model_probabilities[name]["test"]
+        for name in EXPECTED_MODEL_ORDER
+    }
+    curve_col1, curve_col2 = st.columns(2)
+    with curve_col1:
+        st.pyplot(plot_roc_curves(y_test, curve_probabilities, test_ensemble_probability), use_container_width=True)
+    with curve_col2:
+        st.pyplot(plot_pr_curves(y_test, curve_probabilities, test_ensemble_probability), use_container_width=True)
+
 
 # ==============================================================================
 # CONFUSION MATRIX
@@ -2009,6 +2239,11 @@ st.dataframe(
     width="stretch",
     hide_index=True,
 )
+
+st.pyplot(plot_confusion_matrix(y_test, test_predictions), use_container_width=True)
+
+with st.expander("Predicted probability distribution", expanded=False):
+    st.pyplot(plot_probability_distribution(y_test, test_ensemble_probability, threshold), use_container_width=True)
 
 
 # ==============================================================================
@@ -2058,7 +2293,10 @@ st.caption(
     "not establish clinical safety or diagnostic validity."
 )
 
-with st.expander("How to interpret conformal prediction sets"):
+with st.expander("Visualize conformal prediction sets", expanded=True):
+    st.pyplot(plot_conformal_distribution(conformal_sets), use_container_width=True)
+
+with st.expander("How to interpret conformal prediction sets", expanded=True):
     st.markdown(
         """
         **Conformal prediction set:** `{GDM, No GDM}` indicates that both
@@ -2142,6 +2380,9 @@ st.caption(
     "measures and are not clinical confidence scores."
 )
 
+with st.expander("Visualize uncertainty distributions", expanded=True):
+    st.pyplot(plot_uncertainty_distributions(uncertainty, conformal_sets), use_container_width=True)
+
 
 # ==============================================================================
 # FAIRNESS
@@ -2193,6 +2434,11 @@ else:
         "This audit reports age-group selection rates and false-positive "
         "rates. It is not a complete Equalized Odds assessment."
     )
+
+    with st.expander("Visualize fairness audit", expanded=True):
+        fairness_fig = plot_fairness_rates(fairness)
+        if fairness_fig is not None:
+            st.pyplot(fairness_fig, use_container_width=True)
 
 
 # ==============================================================================
@@ -2256,6 +2502,11 @@ if BMI_COLUMN in X_train.columns:
         "prediction threshold."
     )
 
+    with st.expander("Visualize BMI population shift", expanded=True):
+        bmi_fig = plot_bmi_distribution(X_train[BMI_COLUMN], df[BMI_COLUMN])
+        if bmi_fig is not None:
+            st.pyplot(bmi_fig, use_container_width=True)
+
 else:
 
     st.info(
@@ -2295,6 +2546,11 @@ else:
         "Feature importance represents model association/contribution "
         "within the fitted predictive system. It is not causal evidence."
     )
+
+    with st.expander("Visualize model-based feature importance", expanded=True):
+        importance_fig = plot_feature_importance(feature_importance, top_n=15)
+        if importance_fig is not None:
+            st.pyplot(importance_fig, use_container_width=True)
 
 
 # ==============================================================================
