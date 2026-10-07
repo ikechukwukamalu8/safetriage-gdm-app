@@ -5,25 +5,27 @@
 #
 # Research Prototype — NOT a medical device
 #
-# Methodology:
-#   1. 60/15/25 stratified train/calibration/test split
-#   2. MICE-style iterative imputation
-#   3. Training-only ROSE-style smoothed minority oversampling
-#   4. Random Forest + XGBoost + Logistic Regression
-#   5. Equal-weight probability ensemble
-#   6. Calibration-set threshold selection
-#   7. 90% conformal prediction
-#   8. Uncertainty quantification
-#   9. Fairness auditing
-#  10. BMI population-stability monitoring
-#  11. Model-based feature importance / explainability
+# Pipeline:
+#   1. Leakage-aware antepartum predictors
+#   2. 60/15/25 stratified train/calibration/test split
+#   3. MICE-style iterative imputation
+#   4. Training-only ROSE-style smoothed minority oversampling
+#   5. Random Forest
+#   6. XGBoost
+#   7. Logistic Regression
+#   8. Equal-weight probability ensemble
+#   9. Calibration-only threshold selection
+#  10. 90% split conformal prediction
+#  11. Ensemble uncertainty quantification
+#  12. Fairness audit
+#  13. BMI population stability monitoring
+#  14. Model-based explainability
 #
 # Author: Ikechukwu Okechi Kamalu
 # ==============================================================================
 
 import io
 import warnings
-from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -76,38 +78,13 @@ APP_VERSION = "Research Prototype"
 
 TARGET_COLUMN = "Gestational diabetes?"
 
-RANDOM_STATE = 42
+BMI_COLUMN = "Mother's pre-pregnancy BMI (kg/m2)"
 
-TEST_SIZE = 0.25
-CALIBRATION_SIZE_WITHIN_DEVELOPMENT = 0.20
+RANDOM_STATE = 42
 
 CONFORMAL_CONFIDENCE = 0.90
 
 PSI_THRESHOLD = 0.20
-
-BMI_COLUMN = "Mother's pre-pregnancy BMI (kg/m2)"
-
-
-# ==============================================================================
-# LEAKAGE-AWARE ANTEPARTUM PREDICTOR SCHEMA
-# ==============================================================================
-
-APPROVED_PREDICTORS = [
-    "Evidence of maternal anaemia?",
-    "Do we have data related to multiple micronutrient supplementation?",
-    "Did the mother supplement with multiple micronutrients during pregnancy?",
-    "Relative to the start of pregnancy, when did multiple micronutrient supplementation start?",
-    "Relative to the start of pregnancy, when did multiple micronutrient supplementation stop?",
-    "Did the mothers just supplement with multiple micronutrients during pregnancy and nothing else?",
-    "For how many weeks were multiple micronutrients taken?",
-    "Mother's pre-pregnancy BMI (kg/m2)",
-    "Mother's height (cm)",
-    "Mother's weight before pregnancy (kg)",
-    "Mother's age (years)",
-    "Did the mother smoke during pregnancy?",
-    "Twin pregnancy?",
-    "Parity",
-]
 
 EXPECTED_MODEL_ORDER = [
     "Random Forest",
@@ -115,7 +92,9 @@ EXPECTED_MODEL_ORDER = [
     "Logistic Regression",
 ]
 
-EXPECTED_MODEL_KEYS = set(EXPECTED_MODEL_ORDER)
+EXPECTED_MODEL_KEYS = set(
+    EXPECTED_MODEL_ORDER
+)
 
 AGE_GROUPS = [
     "<25",
@@ -135,6 +114,28 @@ BMI_BINS = [
 
 
 # ==============================================================================
+# LEAKAGE-AWARE ANTEPARTUM PREDICTORS
+# ==============================================================================
+
+APPROVED_PREDICTORS = [
+    "Evidence of maternal anaemia?",
+    "Do we have data related to multiple micronutrient supplementation?",
+    "Did the mother supplement with multiple micronutrients during pregnancy?",
+    "Relative to the start of pregnancy, when did multiple micronutrient supplementation start?",
+    "Relative to the start of pregnancy, when did multiple micronutrient supplementation stop?",
+    "Did the mothers just supplement with multiple micronutrients during pregnancy and nothing else?",
+    "For how many weeks were multiple micronutrients taken?",
+    "Mother's pre-pregnancy BMI (kg/m2)",
+    "Mother's height (cm)",
+    "Mother's weight before pregnancy (kg)",
+    "Mother's age (years)",
+    "Did the mother smoke during pregnancy?",
+    "Twin pregnancy?",
+    "Parity",
+]
+
+
+# ==============================================================================
 # PAGE CONFIGURATION
 # ==============================================================================
 
@@ -147,7 +148,7 @@ st.set_page_config(
 
 
 # ==============================================================================
-# CUSTOM CSS
+# CSS
 # ==============================================================================
 
 st.markdown(
@@ -155,32 +156,25 @@ st.markdown(
     <style>
 
     .main-title {
-        font-size: 2.4rem;
+        font-size: 2.35rem;
         font-weight: 700;
-        margin-bottom: 0.2rem;
+        margin-bottom: 0.15rem;
     }
 
     .subtitle {
-        font-size: 1.05rem;
-        color: #666;
-        margin-bottom: 1.2rem;
+        font-size: 1.02rem;
+        color: #777;
+        margin-bottom: 0.8rem;
     }
 
     .research-badge {
         display: inline-block;
         padding: 0.25rem 0.7rem;
         border-radius: 999px;
-        background-color: #f0f2f6;
-        font-size: 0.8rem;
+        background: #f0f2f6;
+        font-size: 0.78rem;
         font-weight: 600;
         margin-bottom: 1rem;
-    }
-
-    .section-note {
-        padding: 0.8rem 1rem;
-        background-color: #f7f7f7;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0 1rem 0;
     }
 
     </style>
@@ -254,7 +248,7 @@ with st.sidebar:
     st.divider()
 
     st.caption(
-        "ROSE is applied only to the training partition. "
+        "ROSE-style balancing is applied only to the training partition. "
         "Calibration and test data retain their natural class distribution."
     )
 
@@ -268,7 +262,8 @@ with st.sidebar:
 # UTILITY FUNCTIONS
 # ==============================================================================
 
-def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+def clean_dataframe(df):
+    """Standardize column names and common missing-value representations."""
 
     df = df.copy()
 
@@ -293,15 +288,16 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def normalize_binary_target(series: pd.Series) -> pd.Series:
+def normalize_binary_target(series):
+    """Convert GDM target values to 0/1."""
 
     result = pd.Series(
         np.nan,
         index=series.index,
-        dtype="float64",
+        dtype=float,
     )
 
-    for idx, value in series.items():
+    for index, value in series.items():
 
         if pd.isna(value):
             continue
@@ -315,7 +311,7 @@ def normalize_binary_target(series: pd.Series) -> pd.Series:
             "true",
             "positive",
         }:
-            result.loc[idx] = 1.0
+            result.loc[index] = 1.0
 
         elif text in {
             "no",
@@ -324,36 +320,34 @@ def normalize_binary_target(series: pd.Series) -> pd.Series:
             "false",
             "negative",
         }:
-            result.loc[idx] = 0.0
+            result.loc[index] = 0.0
 
     return result
 
 
 # ==============================================================================
-# ROSE-STYLE BALANCING
+# ROSE-STYLE TRAINING BALANCING
 # ==============================================================================
 
 def rose_style_balance(
-    X: pd.DataFrame,
-    y: pd.Series,
-    random_state: int = 42,
-    noise_fraction: float = 0.10,
-) -> Tuple[pd.DataFrame, pd.Series, Dict]:
-
+    X,
+    y,
+    random_state=42,
+    noise_fraction=0.10,
+):
     """
-    ROSE-style training-only minority oversampling.
+    ROSE-style smoothed minority oversampling.
 
-    This is a Python approximation of the R ROSE methodology and is not
-    presented as an exact reimplementation of the R ROSE package.
+    This is a Python approximation of the R ROSE methodology.
+    It is intentionally applied only to the training partition.
 
     Numeric minority observations receive Gaussian perturbations.
     Categorical minority values are sampled from observed minority values.
-
-    IMPORTANT:
-    This function is applied only to the training partition.
     """
 
-    rng = np.random.default_rng(random_state)
+    rng = np.random.default_rng(
+        random_state
+    )
 
     X = X.copy()
     y = pd.Series(y).copy()
@@ -363,8 +357,13 @@ def rose_style_balance(
         errors="coerce",
     )
 
-    minority_mask = y_numeric == 1
-    majority_mask = y_numeric == 0
+    minority_mask = (
+        y_numeric == 1
+    )
+
+    majority_mask = (
+        y_numeric == 0
+    )
 
     X_minority = X.loc[
         minority_mask
@@ -390,7 +389,10 @@ def rose_style_balance(
         X_majority
     )
 
-    if minority_count == 0 or majority_count == 0:
+    if (
+        minority_count == 0
+        or majority_count == 0
+    ):
 
         return (
             X,
@@ -449,7 +451,7 @@ def rose_style_balance(
 
         std = values.std()
 
-        if pd.isna(std) or std == 0:
+        if pd.isna(std):
             std = 0.0
 
         numeric_std[column] = float(
@@ -493,7 +495,7 @@ def rose_style_balance(
                 value = (
                     value
                     + rng.normal(
-                        0.0,
+                        0,
                         noise_sd,
                     )
                 )
@@ -509,8 +511,10 @@ def rose_style_balance(
 
             if len(values) > 0:
 
-                base_row[column] = rng.choice(
-                    values.to_numpy()
+                base_row[column] = (
+                    rng.choice(
+                        values.to_numpy()
+                    )
                 )
 
         synthetic_rows.append(
@@ -524,8 +528,7 @@ def rose_style_balance(
 
     y_synthetic = pd.Series(
         np.ones(
-            len(X_synthetic),
-            dtype=float,
+            len(X_synthetic)
         ),
         name=y.name,
     )
@@ -554,21 +557,19 @@ def rose_style_balance(
         ignore_index=True,
     )
 
-    shuffle_indices = (
-        rng.permutation(
-            len(X_balanced)
-        )
+    shuffle_index = rng.permutation(
+        len(X_balanced)
     )
 
     X_balanced = (
         X_balanced
-        .iloc[shuffle_indices]
+        .iloc[shuffle_index]
         .reset_index(drop=True)
     )
 
     y_balanced = (
         y_balanced
-        .iloc[shuffle_indices]
+        .iloc[shuffle_index]
         .reset_index(drop=True)
     )
 
@@ -592,12 +593,10 @@ def rose_style_balance(
 
 
 # ==============================================================================
-# PREPROCESSING
+# PREPROCESSOR
 # ==============================================================================
 
-def make_preprocessor(
-    X: pd.DataFrame,
-) -> ColumnTransformer:
+def make_preprocessor(X):
 
     numeric_columns = (
         X.select_dtypes(
@@ -668,10 +667,10 @@ def make_preprocessor(
 
 
 # ==============================================================================
-# MODEL DEFINITIONS
+# MODELS
 # ==============================================================================
 
-def create_models() -> Dict[str, object]:
+def create_models():
 
     return {
 
@@ -703,14 +702,14 @@ def create_models() -> Dict[str, object]:
 
 
 # ==============================================================================
-# MODEL TRAINING
+# TRAINING
 # ==============================================================================
 
 def train_models(
-    X_train: pd.DataFrame,
-    y_train: pd.Series,
-    X_calibration: pd.DataFrame,
-    X_test: pd.DataFrame,
+    X_train,
+    y_train,
+    X_calibration,
+    X_test,
 ):
 
     (
@@ -769,13 +768,18 @@ def train_models(
         probabilities[
             model_name
         ] = {
-            "calibration": model.predict_proba(
-                X_calibration_processed
-            )[:, 1],
-
-            "test": model.predict_proba(
-                X_test_processed
-            )[:, 1],
+            "calibration": (
+                model
+                .predict_proba(
+                    X_calibration_processed
+                )[:, 1]
+            ),
+            "test": (
+                model
+                .predict_proba(
+                    X_test_processed
+                )[:, 1]
+            ),
         }
 
     return (
@@ -783,9 +787,6 @@ def train_models(
         fitted_models,
         probabilities,
         rose_information,
-        X_train_processed,
-        X_calibration_processed,
-        X_test_processed,
     )
 
 
@@ -794,8 +795,8 @@ def train_models(
 # ==============================================================================
 
 def ensemble_probability(
-    probabilities: Dict[str, np.ndarray],
-) -> np.ndarray:
+    probabilities
+):
 
     return np.mean(
         np.column_stack(
@@ -803,7 +804,8 @@ def ensemble_probability(
                 probabilities[
                     model_name
                 ]
-                for model_name in EXPECTED_MODEL_ORDER
+                for model_name
+                in EXPECTED_MODEL_ORDER
             ]
         ),
         axis=1,
@@ -815,9 +817,9 @@ def ensemble_probability(
 # ==============================================================================
 
 def select_threshold(
-    y_true: pd.Series,
-    probability: np.ndarray,
-) -> Tuple[float, pd.DataFrame]:
+    y_true,
+    probability,
+):
 
     thresholds = np.linspace(
         0.05,
@@ -834,7 +836,8 @@ def select_threshold(
     for threshold in thresholds:
 
         prediction = (
-            probability >= threshold
+            probability
+            >= threshold
         ).astype(int)
 
         sensitivity = recall_score(
@@ -860,25 +863,26 @@ def select_threshold(
                 "threshold": threshold,
                 "sensitivity": sensitivity,
                 "specificity": specificity,
-                "balanced_accuracy": balanced_accuracy,
+                "balanced_accuracy":
+                    balanced_accuracy,
             }
         )
 
-    threshold_table = pd.DataFrame(
+    table = pd.DataFrame(
         records
     )
 
-    best_row = threshold_table.loc[
-        threshold_table[
+    best = table.loc[
+        table[
             "balanced_accuracy"
         ].idxmax()
     ]
 
     return (
         float(
-            best_row["threshold"]
+            best["threshold"]
         ),
-        threshold_table,
+        table,
     )
 
 
@@ -887,10 +891,10 @@ def select_threshold(
 # ==============================================================================
 
 def conformal_prediction(
-    calibration_probability: np.ndarray,
-    calibration_y: pd.Series,
-    test_probability: np.ndarray,
-    confidence: float = 0.90,
+    calibration_probability,
+    calibration_y,
+    test_probability,
+    confidence=0.90,
 ):
 
     calibration_probability = np.asarray(
@@ -925,27 +929,36 @@ def conformal_prediction(
         method="higher",
     )
 
-    test_probability = np.asarray(
-        test_probability
-    )
-
     prediction_sets = []
 
-    for probability in test_probability:
+    for probability in np.asarray(
+        test_probability
+    ):
 
-        classes = []
+        labels = []
 
-        if 1.0 - probability <= q:
-            classes.append("GDM")
+        if (
+            1.0 - probability
+            <= q
+        ):
+            labels.append(
+                "GDM"
+            )
 
         if probability <= q:
-            classes.append("No GDM")
+            labels.append(
+                "No GDM"
+            )
 
-        if len(classes) == 0:
-            classes = ["Uncertain"]
+        if not labels:
+            labels = [
+                "Uncertain"
+            ]
 
         prediction_sets.append(
-            "{" + ", ".join(classes) + "}"
+            "{"
+            + ", ".join(labels)
+            + "}"
         )
 
     return (
@@ -953,7 +966,6 @@ def conformal_prediction(
             prediction_sets
         ),
         float(q),
-        scores,
     )
 
 
@@ -961,49 +973,45 @@ def conformal_prediction(
 # UNCERTAINTY
 # ==============================================================================
 
-def binary_entropy(
-    probabilities: np.ndarray,
-) -> np.ndarray:
+def binary_entropy(probability):
 
-    probabilities = np.clip(
-        probabilities,
+    probability = np.clip(
+        probability,
         1e-12,
         1.0 - 1e-12,
     )
 
     return -(
-        probabilities
-        * np.log2(probabilities)
+        probability
+        * np.log2(probability)
         +
-        (1.0 - probabilities)
+        (1.0 - probability)
         * np.log2(
-            1.0 - probabilities
+            1.0 - probability
         )
     )
 
 
 def calculate_uncertainty(
-    model_probabilities: Dict[str, np.ndarray],
-) -> Dict[str, np.ndarray]:
+    probabilities
+):
 
     matrix = np.column_stack(
         [
-            model_probabilities[
+            probabilities[
                 model_name
             ]
-            for model_name in EXPECTED_MODEL_ORDER
+            for model_name
+            in EXPECTED_MODEL_ORDER
         ]
     )
 
-    predictive_probability = (
-        matrix.mean(
-            axis=1
-        )
+    ensemble = matrix.mean(
+        axis=1
     )
 
     epistemic = matrix.std(
-        axis=1,
-        ddof=0,
+        axis=1
     )
 
     aleatoric = (
@@ -1013,139 +1021,108 @@ def calculate_uncertainty(
         .mean(axis=1)
     )
 
-    predictive_entropy = binary_entropy(
-        predictive_probability
+    predictive_entropy = (
+        binary_entropy(
+            ensemble
+        )
     )
 
     mutual_information = np.maximum(
         predictive_entropy
         - aleatoric,
-        0.0,
+        0,
     )
 
     return {
         "epistemic_uncertainty": epistemic,
         "aleatoric_uncertainty": aleatoric,
-        "predictive_entropy": predictive_entropy,
-        "mutual_information": mutual_information,
+        "predictive_entropy":
+            predictive_entropy,
+        "mutual_information":
+            mutual_information,
     }
 
 
 # ==============================================================================
-# PERFORMANCE METRICS
+# METRICS
 # ==============================================================================
 
 def calculate_metrics(
-    y_true: pd.Series,
-    probability: np.ndarray,
-    threshold: float,
-) -> Dict[str, float]:
+    y_true,
+    probability,
+    threshold,
+):
 
     y_true = np.asarray(
         y_true
     ).astype(int)
 
     prediction = (
-        probability >= threshold
+        probability
+        >= threshold
     ).astype(int)
 
-    metrics = {}
-
-    try:
-        metrics["ROC-AUC"] = roc_auc_score(
+    return {
+        "ROC-AUC": roc_auc_score(
             y_true,
             probability,
-        )
-    except Exception:
-        metrics["ROC-AUC"] = np.nan
-
-    try:
-        metrics["PR-AUC"] = (
-            average_precision_score(
+        ),
+        "PR-AUC": average_precision_score(
+            y_true,
+            probability,
+        ),
+        "Accuracy": accuracy_score(
+            y_true,
+            prediction,
+        ),
+        "Balanced Accuracy":
+            balanced_accuracy_score(
                 y_true,
-                probability,
-            )
-        )
-    except Exception:
-        metrics["PR-AUC"] = np.nan
-
-    metrics["Accuracy"] = (
-        accuracy_score(
-            y_true,
-            prediction,
-        )
-    )
-
-    metrics["Balanced Accuracy"] = (
-        balanced_accuracy_score(
-            y_true,
-            prediction,
-        )
-    )
-
-    metrics["Sensitivity"] = (
-        recall_score(
+                prediction,
+            ),
+        "Sensitivity": recall_score(
             y_true,
             prediction,
             zero_division=0,
-        )
-    )
-
-    metrics["Specificity"] = (
-        recall_score(
+        ),
+        "Specificity": recall_score(
             y_true,
             prediction,
             pos_label=0,
             zero_division=0,
-        )
-    )
-
-    metrics["Precision"] = (
-        precision_score(
+        ),
+        "Precision": precision_score(
             y_true,
             prediction,
             zero_division=0,
-        )
-    )
-
-    metrics["F1"] = (
-        f1_score(
+        ),
+        "F1": f1_score(
             y_true,
             prediction,
             zero_division=0,
-        )
-    )
-
-    metrics["Brier"] = (
-        brier_score_loss(
+        ),
+        "Brier": brier_score_loss(
             y_true,
             probability,
-        )
-    )
-
-    metrics["Log Loss"] = (
-        log_loss(
+        ),
+        "Log Loss": log_loss(
             y_true,
             np.column_stack(
                 [
-                    1.0 - probability,
+                    1 - probability,
                     probability,
                 ]
             ),
             labels=[0, 1],
-        )
-    )
-
-    return metrics
+        ),
+    }
 
 
 # ==============================================================================
 # FAIRNESS
 # ==============================================================================
 
-def age_group(
-    age: pd.Series,
-) -> pd.Series:
+def create_age_groups(age):
 
     age = pd.to_numeric(
         age,
@@ -1162,34 +1139,29 @@ def age_group(
             np.inf,
         ],
         labels=AGE_GROUPS,
-        right=True,
     )
 
 
 def fairness_audit(
-    df: pd.DataFrame,
-    probability: np.ndarray,
-    threshold: float,
-) -> pd.DataFrame:
+    data,
+    probability,
+    threshold,
+):
 
     if (
         "Mother's age (years)"
-        not in df.columns
+        not in data.columns
     ):
         return pd.DataFrame()
 
-    df = df.reset_index(
-        drop=True
-    )
-
     age = pd.to_numeric(
-        df[
+        data[
             "Mother's age (years)"
         ],
         errors="coerce",
     )
 
-    groups = age_group(
+    groups = create_age_groups(
         age
     )
 
@@ -1201,73 +1173,82 @@ def fairness_audit(
     ).astype(int)
 
     target = normalize_binary_target(
-        df[TARGET_COLUMN]
+        data[TARGET_COLUMN]
     )
 
     records = []
 
     for group in AGE_GROUPS:
 
-        mask_age = (
+        group_mask = (
             groups.astype(str)
             == group
         ).to_numpy()
 
-        if mask_age.sum() == 0:
+        if group_mask.sum() == 0:
             continue
 
         selection_rate = (
             predictions[
-                mask_age
+                group_mask
             ].mean()
         )
 
-        ground_truth_mask = (
-            mask_age
+        valid_truth = (
+            group_mask
             & target.notna().to_numpy()
         )
 
         y_group = (
             target.to_numpy()[
-                ground_truth_mask
+                valid_truth
             ]
             .astype(int)
         )
 
-        p_group = predictions[
-            ground_truth_mask
-        ]
+        prediction_group = (
+            predictions[
+                valid_truth
+            ]
+        )
 
-        if len(y_group) > 0:
+        if len(y_group) == 0:
 
-            negative_count = (
+            fpr = np.nan
+
+        else:
+
+            negatives = (
                 y_group == 0
-            ).sum()
+            )
 
-            if negative_count > 0:
+            if negatives.sum() == 0:
+
+                fpr = np.nan
+
+            else:
 
                 fpr = (
                     (
-                        (p_group == 1)
-                        & (y_group == 0)
+                        (
+                            prediction_group
+                            == 1
+                        )
+                        & negatives
                     ).sum()
-                    / negative_count
+                    / negatives.sum()
                 )
-
-            else:
-                fpr = np.nan
-
-        else:
-            fpr = np.nan
 
         records.append(
             {
                 "Age group": group,
                 "N": int(
-                    mask_age.sum()
+                    group_mask.sum()
                 ),
-                "Selection rate": selection_rate,
-                "False-positive rate": fpr,
+                "Selection rate":
+                    selection_rate,
+                "False-positive rate":
+                    fpr,
             }
         )
 
@@ -1277,14 +1258,14 @@ def fairness_audit(
 
 
 # ==============================================================================
-# POPULATION STABILITY INDEX
+# PSI
 # ==============================================================================
 
 def calculate_psi(
-    reference: pd.Series,
-    current: pd.Series,
-    bins: List[float],
-) -> float:
+    reference,
+    current,
+    bins,
+):
 
     reference = pd.to_numeric(
         reference,
@@ -1324,51 +1305,43 @@ def calculate_psi(
         )
     )
 
-    reference_proportions = (
+    reference_prop = (
         reference_counts
         / len(reference)
+    ).clip(
+        lower=1e-6
     )
 
-    current_proportions = (
+    current_prop = (
         current_counts
         / len(current)
+    ).clip(
+        lower=1e-6
     )
 
-    epsilon = 1e-6
-
-    reference_proportions = (
-        reference_proportions
-        .clip(lower=epsilon)
-    )
-
-    current_proportions = (
-        current_proportions
-        .clip(lower=epsilon)
-    )
-
-    psi = (
+    return float(
         (
-            current_proportions
-            - reference_proportions
-        )
-        * np.log(
-            current_proportions
-            / reference_proportions
-        )
-    ).sum()
-
-    return float(psi)
+            (
+                current_prop
+                - reference_prop
+            )
+            * np.log(
+                current_prop
+                / reference_prop
+            )
+        ).sum()
+    )
 
 
 # ==============================================================================
-# EXPLAINABILITY
+# FEATURE IMPORTANCE
 # ==============================================================================
 
 def aggregate_feature_importance(
-    fitted_models: Dict[str, object],
-    preprocessor: ColumnTransformer,
-    original_columns: List[str],
-) -> pd.DataFrame:
+    models,
+    preprocessor,
+    original_columns,
+):
 
     try:
 
@@ -1381,11 +1354,11 @@ def aggregate_feature_importance(
 
         return pd.DataFrame()
 
-    importance_tables = []
+    all_importance = []
 
     for model_name in EXPECTED_MODEL_ORDER:
 
-        model = fitted_models[
+        model = models[
             model_name
         ]
 
@@ -1412,54 +1385,57 @@ def aggregate_feature_importance(
 
             continue
 
-        importance_tables.append(
+        all_importance.append(
             pd.DataFrame(
                 {
-                    "feature": feature_names,
-                    "importance": values,
+                    "feature":
+                        feature_names,
+                    "importance":
+                        values,
+                    "model":
+                        model_name,
                 }
             )
         )
 
-    if not importance_tables:
+    if not all_importance:
 
         return pd.DataFrame()
 
     combined = pd.concat(
-        importance_tables,
+        all_importance,
         ignore_index=True,
     )
 
-    def map_feature(name):
+    def original_variable(
+        feature
+    ):
 
-        clean_name = name
-
-        if clean_name.startswith(
+        if feature.startswith(
             "numeric__"
         ):
 
-            return clean_name.replace(
+            return feature.replace(
                 "numeric__",
                 "",
                 1,
             )
 
-        if clean_name.startswith(
+        if feature.startswith(
             "categorical__"
         ):
 
-            clean_name = (
-                clean_name.replace(
-                    "categorical__",
-                    "",
-                    1,
-                )
+            clean = feature.replace(
+                "categorical__",
+                "",
+                1,
             )
 
             matches = [
                 column
-                for column in original_columns
-                if clean_name.startswith(
+                for column
+                in original_columns
+                if clean.startswith(
                     column
                 )
             ]
@@ -1471,18 +1447,19 @@ def aggregate_feature_importance(
                     key=len,
                 )
 
-        return clean_name
+            return clean
+
+        return feature
 
     combined[
         "original_variable"
-    ] = (
-        combined[
-            "feature"
-        ]
-        .map(map_feature)
+    ] = combined[
+        "feature"
+    ].map(
+        original_variable
     )
 
-    result = (
+    return (
         combined
         .groupby(
             "original_variable",
@@ -1497,11 +1474,9 @@ def aggregate_feature_importance(
         )
     )
 
-    return result
-
 
 # ==============================================================================
-# DATA UPLOAD
+# FILE UPLOAD
 # ==============================================================================
 
 uploaded_file = st.file_uploader(
@@ -1518,24 +1493,11 @@ if uploaded_file is None:
         """
         ### Getting started
 
-        Upload an Excel dataset containing the required GDM target and
+        Upload an Excel dataset containing the required GDM outcome and
         antepartum predictor variables.
 
-        The application will then:
-
-        - validate the dataset;
-        - identify rows with known GDM status;
-        - perform the leakage-aware 60/15/25 split;
-        - apply MICE-style imputation;
-        - apply ROSE-style balancing only to training data;
-        - train the three specified models;
-        - generate ensemble predictions;
-        - determine the decision threshold from calibration data;
-        - evaluate the untouched test set;
-        - calculate conformal prediction sets;
-        - audit age-group fairness;
-        - calculate BMI population stability;
-        - provide model-based feature importance.
+        The application will validate the dataset and then execute the
+        complete uncertainty-aware modelling pipeline.
         """
     )
 
@@ -1543,16 +1505,16 @@ if uploaded_file is None:
 
 
 # ==============================================================================
-# READ DATA
+# READ EXCEL
 # ==============================================================================
 
 try:
 
-    file_bytes = uploaded_file.read()
+    file_data = uploaded_file.read()
 
     df = pd.read_excel(
         io.BytesIO(
-            file_bytes
+            file_data
         )
     )
 
@@ -1581,26 +1543,34 @@ st.subheader(
     "1. Dataset validation"
 )
 
-col1, col2, col3, col4 = st.columns(4)
+available_predictors = [
+    column
+    for column in APPROVED_PREDICTORS
+    if column in df.columns
+]
 
-with col1:
+validation_columns = st.columns(
+    4
+)
+
+with validation_columns[0]:
 
     st.metric(
         "Rows",
-        f"{df.shape[0]:,}",
+        f"{len(df):,}",
     )
 
-with col2:
+with validation_columns[1]:
 
     st.metric(
         "Columns",
         f"{df.shape[1]:,}",
     )
 
-with col3:
+with validation_columns[2]:
 
     st.metric(
-        "GDM column",
+        "GDM target",
         (
             "Found"
             if TARGET_COLUMN
@@ -1609,16 +1579,10 @@ with col3:
         ),
     )
 
-with col4:
-
-    available_predictors = [
-        column
-        for column in APPROVED_PREDICTORS
-        if column in df.columns
-    ]
+with validation_columns[3]:
 
     st.metric(
-        "Predictors found",
+        "Predictors",
         f"{len(available_predictors)}/"
         f"{len(APPROVED_PREDICTORS)}",
     )
@@ -1627,8 +1591,8 @@ with col4:
 if TARGET_COLUMN not in df.columns:
 
     st.error(
-        f"Required target column "
-        f"`{TARGET_COLUMN}` was not found."
+        f"Required target `{TARGET_COLUMN}` "
+        "was not found."
     )
 
     st.stop()
@@ -1643,18 +1607,19 @@ missing_predictors = [
 if missing_predictors:
 
     st.error(
-        "Required antepartum predictor columns are missing:"
+        "Required predictor columns are missing:"
     )
 
-    st.write(
-        missing_predictors
-    )
+    for column in missing_predictors:
+        st.write(
+            f"- {column}"
+        )
 
     st.stop()
 
 
 # ==============================================================================
-# TARGET PREPARATION
+# TARGET
 # ==============================================================================
 
 target = normalize_binary_target(
@@ -1673,7 +1638,7 @@ y_labeled = target.loc[
 ].astype(int)
 
 st.write(
-    f"Rows with usable GDM outcome: "
+    f"Rows with known GDM outcome: "
     f"**{len(y_labeled):,}**"
 )
 
@@ -1683,7 +1648,7 @@ target_counts = (
     .sort_index()
 )
 
-target_summary = pd.DataFrame(
+target_table = pd.DataFrame(
     {
         "Outcome": [
             "No GDM",
@@ -1707,7 +1672,7 @@ target_summary = pd.DataFrame(
 )
 
 st.dataframe(
-    target_summary,
+    target_table,
     width="stretch",
     hide_index=True,
 )
@@ -1715,15 +1680,14 @@ st.dataframe(
 if y_labeled.nunique() < 2:
 
     st.error(
-        "The dataset does not contain both GDM classes "
-        "among rows with known outcomes."
+        "Both GDM classes are required."
     )
 
     st.stop()
 
 
 # ==============================================================================
-# DATA SPLITTING
+# SPLIT: 60 / 15 / 25
 # ==============================================================================
 
 st.subheader(
@@ -1740,7 +1704,7 @@ try:
     ) = train_test_split(
         X_labeled,
         y_labeled,
-        test_size=TEST_SIZE,
+        test_size=0.25,
         random_state=RANDOM_STATE,
         stratify=y_labeled,
     )
@@ -1753,7 +1717,7 @@ try:
     ) = train_test_split(
         X_development,
         y_development,
-        test_size=CALIBRATION_SIZE_WITHIN_DEVELOPMENT,
+        test_size=0.20,
         random_state=RANDOM_STATE,
         stratify=y_development,
     )
@@ -1761,7 +1725,7 @@ try:
 except Exception as exc:
 
     st.error(
-        "The stratified split could not be created."
+        "The stratified split failed."
     )
 
     st.exception(
@@ -1771,7 +1735,7 @@ except Exception as exc:
     st.stop()
 
 
-split_summary = pd.DataFrame(
+split_table = pd.DataFrame(
     {
         "Partition": [
             "Training",
@@ -1789,33 +1753,27 @@ split_summary = pd.DataFrame(
             int(y_test.sum()),
         ],
         "No GDM": [
-            int(
-                (y_train == 0).sum()
-            ),
-            int(
-                (y_calibration == 0).sum()
-            ),
-            int(
-                (y_test == 0).sum()
-            ),
+            int((y_train == 0).sum()),
+            int((y_calibration == 0).sum()),
+            int((y_test == 0).sum()),
         ],
     }
 )
 
 st.dataframe(
-    split_summary,
+    split_table,
     width="stretch",
     hide_index=True,
 )
 
 st.caption(
-    "The test partition remains untouched and naturally imbalanced. "
-    "ROSE-style balancing is applied only to training data."
+    "The test partition remains untouched. "
+    "Only the training partition is balanced."
 )
 
 
 # ==============================================================================
-# MODEL TRAINING
+# TRAIN MODELS
 # ==============================================================================
 
 st.subheader(
@@ -1823,7 +1781,7 @@ st.subheader(
 )
 
 with st.spinner(
-    "Training Random Forest, XGBoost, and Logistic Regression..."
+    "Training the three-model ensemble..."
 ):
 
     try:
@@ -1833,9 +1791,6 @@ with st.spinner(
             fitted_models,
             model_probabilities,
             rose_information,
-            X_train_processed,
-            X_calibration_processed,
-            X_test_processed,
         ) = train_models(
             X_train,
             y_train,
@@ -1856,31 +1811,19 @@ with st.spinner(
         st.stop()
 
 
-if set(
-    fitted_models.keys()
-) != EXPECTED_MODEL_KEYS:
-
-    st.error(
-        "The model architecture does not match "
-        "the required three-model architecture."
-    )
-
-    st.stop()
-
-
 # ==============================================================================
-# ROSE INFORMATION
+# ROSE SUMMARY
 # ==============================================================================
 
 st.markdown(
     "### Training-only ROSE balancing"
 )
 
-rose_col1, rose_col2, rose_col3, rose_col4 = (
-    st.columns(4)
+rose_columns = st.columns(
+    4
 )
 
-with rose_col1:
+with rose_columns[0]:
 
     st.metric(
         "Original GDM",
@@ -1889,7 +1832,7 @@ with rose_col1:
         ],
     )
 
-with rose_col2:
+with rose_columns[1]:
 
     st.metric(
         "Original No GDM",
@@ -1898,7 +1841,7 @@ with rose_col2:
         ],
     )
 
-with rose_col3:
+with rose_columns[2]:
 
     st.metric(
         "Synthetic GDM",
@@ -1907,7 +1850,7 @@ with rose_col3:
         ],
     )
 
-with rose_col4:
+with rose_columns[3]:
 
     st.metric(
         "Final training rows",
@@ -1922,15 +1865,9 @@ with rose_col4:
         ),
     )
 
-st.caption(
-    "ROSE-style synthetic observations are generated exclusively from "
-    "the training partition. Calibration and test observations are not "
-    "oversampled."
-)
-
 
 # ==============================================================================
-# CALIBRATION AND TEST ENSEMBLES
+# ENSEMBLE PROBABILITIES
 # ==============================================================================
 
 calibration_ensemble_probability = (
@@ -1987,7 +1924,7 @@ st.caption(
 
 
 # ==============================================================================
-# TEST METRICS
+# TEST PERFORMANCE
 # ==============================================================================
 
 test_metrics = calculate_metrics(
@@ -2000,7 +1937,11 @@ st.subheader(
     "5. Test-set performance"
 )
 
-metric_columns = st.columns(5)
+
+# IMPORTANT:
+# Two-column responsive layout instead of st.columns(5).
+# This prevents values such as 0.607 from being displayed as 0....
+# on mobile screens.
 
 display_metrics = [
     (
@@ -2025,46 +1966,58 @@ display_metrics = [
     ),
 ]
 
-for column, (
-    metric_name,
-    metric_value,
-) in zip(
-    metric_columns,
-    display_metrics,
+for row_start in range(
+    0,
+    len(display_metrics),
+    2,
 ):
 
-    with column:
+    row_metrics = display_metrics[
+        row_start:
+        row_start + 2
+    ]
 
-        if pd.isna(
-            metric_value
-        ):
+    columns = st.columns(
+        len(row_metrics)
+    )
 
-            st.metric(
-                metric_name,
-                "NA",
-            )
+    for column, (
+        metric_name,
+        metric_value,
+    ) in zip(
+        columns,
+        row_metrics,
+    ):
 
-        else:
+        with column:
 
-            st.metric(
-                metric_name,
-                f"{metric_value:.3f}",
-            )
+            if pd.isna(
+                metric_value
+            ):
+
+                st.metric(
+                    metric_name,
+                    "NA",
+                )
+
+            else:
+
+                st.metric(
+                    metric_name,
+                    f"{metric_value:.3f}",
+                )
 
 
 metric_table = pd.DataFrame(
     {
-        "Metric": list(
-            test_metrics.keys()
-        ),
+        "Metric":
+            list(
+                test_metrics.keys()
+            ),
         "Value": [
-            (
-                "NA"
-                if pd.isna(value)
-                else round(
-                    value,
-                    4,
-                )
+            round(
+                value,
+                4,
             )
             for value
             in test_metrics.values()
@@ -2091,7 +2044,7 @@ individual_records = []
 
 for model_name in EXPECTED_MODEL_ORDER:
 
-    model_metrics = calculate_metrics(
+    metrics = calculate_metrics(
         y_test,
         model_probabilities[
             model_name
@@ -2102,7 +2055,7 @@ for model_name in EXPECTED_MODEL_ORDER:
     individual_records.append(
         {
             "Model": model_name,
-            **model_metrics,
+            **metrics,
         }
     )
 
@@ -2118,14 +2071,14 @@ st.dataframe(
 
 
 # ==============================================================================
-# MODEL PERFORMANCE CHART
+# MODEL PERFORMANCE GRAPH
 # ==============================================================================
 
 st.markdown(
     "### Model performance comparison"
 )
 
-performance_plot_df = (
+performance_df = (
     individual_table[
         [
             "Model",
@@ -2146,7 +2099,7 @@ performance_plot_df = (
 
 performance_chart = (
     alt.Chart(
-        performance_plot_df
+        performance_df
     )
     .mark_bar()
     .encode(
@@ -2168,12 +2121,8 @@ performance_chart = (
         ),
         xOffset="Metric:N",
         tooltip=[
-            alt.Tooltip(
-                "Model:N"
-            ),
-            alt.Tooltip(
-                "Metric:N"
-            ),
+            "Model:N",
+            "Metric:N",
             alt.Tooltip(
                 "Score:Q",
                 format=".3f",
@@ -2202,22 +2151,23 @@ st.markdown(
 roc_records = []
 
 roc_probability_sets = {
-    "Random Forest": (
+    "Random Forest":
         model_probabilities[
             "Random Forest"
-        ]["test"]
-    ),
-    "XGBoost": (
+        ]["test"],
+
+    "XGBoost":
         model_probabilities[
             "XGBoost"
-        ]["test"]
-    ),
-    "Logistic Regression": (
+        ]["test"],
+
+    "Logistic Regression":
         model_probabilities[
             "Logistic Regression"
-        ]["test"]
-    ),
-    "Ensemble": test_ensemble_probability,
+        ]["test"],
+
+    "Ensemble":
+        test_ensemble_probability,
 }
 
 for model_name, probability in (
@@ -2229,10 +2179,7 @@ for model_name, probability in (
         probability,
     )
 
-    for (
-        false_positive_rate,
-        true_positive_rate,
-    ) in zip(
+    for x_value, y_value in zip(
         fpr,
         tpr,
     ):
@@ -2241,9 +2188,9 @@ for model_name, probability in (
             {
                 "Model": model_name,
                 "False Positive Rate":
-                    false_positive_rate,
+                    x_value,
                 "True Positive Rate":
-                    true_positive_rate,
+                    y_value,
             }
         )
 
@@ -2278,9 +2225,7 @@ roc_chart = (
             title="Model",
         ),
         tooltip=[
-            alt.Tooltip(
-                "Model:N"
-            ),
+            "Model:N",
             alt.Tooltip(
                 "False Positive Rate:Q",
                 format=".3f",
@@ -2319,12 +2264,9 @@ roc_reference = (
 )
 
 st.altair_chart(
-    roc_chart + roc_reference,
+    roc_chart
+    + roc_reference,
     width="stretch",
-)
-
-st.caption(
-    "ROC curves are evaluated on the untouched test partition."
 )
 
 
@@ -2360,8 +2302,10 @@ for model_name, probability in (
         pr_records.append(
             {
                 "Model": model_name,
-                "Recall": recall_value,
-                "Precision": precision_value,
+                "Recall":
+                    recall_value,
+                "Precision":
+                    precision_value,
             }
         )
 
@@ -2396,9 +2340,7 @@ pr_chart = (
             title="Model",
         ),
         tooltip=[
-            alt.Tooltip(
-                "Model:N"
-            ),
+            "Model:N",
             alt.Tooltip(
                 "Recall:Q",
                 format=".3f",
@@ -2419,14 +2361,9 @@ st.altair_chart(
     width="stretch",
 )
 
-st.caption(
-    "Precision–Recall curves are particularly informative for the "
-    "imbalanced GDM outcome."
-)
-
 
 # ==============================================================================
-# THRESHOLD ANALYSIS
+# THRESHOLD GRAPH
 # ==============================================================================
 
 st.markdown(
@@ -2492,9 +2429,7 @@ threshold_chart = (
                 "threshold:Q",
                 format=".3f",
             ),
-            alt.Tooltip(
-                "Metric:N"
-            ),
+            "Metric:N",
             alt.Tooltip(
                 "Score:Q",
                 format=".3f",
@@ -2533,11 +2468,6 @@ st.altair_chart(
     width="stretch",
 )
 
-st.caption(
-    f"The vertical line marks the calibration-selected threshold "
-    f"of {threshold:.3f}."
-)
-
 
 # ==============================================================================
 # CONFUSION MATRIX
@@ -2548,14 +2478,17 @@ test_predictions = (
     >= threshold
 ).astype(int)
 
-tn, fp, fn, tp = confusion_matrix(
-    y_test,
-    test_predictions,
-    labels=[
-        0,
-        1,
-    ],
-).ravel()
+tn, fp, fn, tp = (
+    confusion_matrix(
+        y_test,
+        test_predictions,
+        labels=[
+            0,
+            1,
+        ],
+    )
+    .ravel()
+)
 
 st.markdown(
     "### Confusion matrix"
@@ -2626,15 +2559,9 @@ cm_chart = (
             title="Count",
         ),
         tooltip=[
-            alt.Tooltip(
-                "Actual:N"
-            ),
-            alt.Tooltip(
-                "Predicted:N"
-            ),
-            alt.Tooltip(
-                "Count:Q"
-            ),
+            "Actual:N",
+            "Predicted:N",
+            "Count:Q",
         ],
     )
     .properties(
@@ -2659,7 +2586,6 @@ st.subheader(
 (
     conformal_sets,
     conformal_q,
-    calibration_scores,
 ) = conformal_prediction(
     calibration_ensemble_probability,
     y_calibration,
@@ -2667,45 +2593,47 @@ st.subheader(
     confidence=CONFORMAL_CONFIDENCE,
 )
 
-test_conformal_coverage = np.mean(
-    [
-        (
-            (
-                "GDM"
-                in prediction_set
-            )
-            if true_label == 1
-            else (
-                "No GDM"
-                in prediction_set
-            )
+coverage_values = []
+
+for true_label, prediction_set in zip(
+    y_test,
+    conformal_sets,
+):
+
+    if true_label == 1:
+
+        coverage_values.append(
+            "GDM"
+            in prediction_set
         )
-        for (
-            true_label,
-            prediction_set,
-        ) in zip(
-            y_test,
-            conformal_sets,
+
+    else:
+
+        coverage_values.append(
+            "No GDM"
+            in prediction_set
         )
-    ]
+
+coverage = np.mean(
+    coverage_values
 )
 
-conformal_col1, conformal_col2 = (
-    st.columns(2)
+conformal_columns = st.columns(
+    2
 )
 
-with conformal_col1:
+with conformal_columns[0]:
 
     st.metric(
         "Nonconformity quantile",
         f"{conformal_q:.4f}",
     )
 
-with conformal_col2:
+with conformal_columns[1]:
 
     st.metric(
         "Observed test coverage",
-        f"{test_conformal_coverage:.1%}",
+        f"{coverage:.1%}",
     )
 
 st.caption(
@@ -2773,20 +2701,24 @@ st.dataframe(
     hide_index=True,
 )
 
-uncertainty_plot_df = pd.DataFrame(
+uncertainty_df = pd.DataFrame(
     {
-        "Epistemic": uncertainty[
-            "epistemic_uncertainty"
-        ],
-        "Aleatoric": uncertainty[
-            "aleatoric_uncertainty"
-        ],
-        "Predictive entropy": uncertainty[
-            "predictive_entropy"
-        ],
-        "Mutual information": uncertainty[
-            "mutual_information"
-        ],
+        "Epistemic":
+            uncertainty[
+                "epistemic_uncertainty"
+            ],
+        "Aleatoric":
+            uncertainty[
+                "aleatoric_uncertainty"
+            ],
+        "Predictive entropy":
+            uncertainty[
+                "predictive_entropy"
+            ],
+        "Mutual information":
+            uncertainty[
+                "mutual_information"
+            ],
     }
 ).melt(
     var_name="Measure",
@@ -2795,7 +2727,7 @@ uncertainty_plot_df = pd.DataFrame(
 
 uncertainty_chart = (
     alt.Chart(
-        uncertainty_plot_df
+        uncertainty_df
     )
     .mark_boxplot()
     .encode(
@@ -2808,9 +2740,7 @@ uncertainty_chart = (
             title="Value",
         ),
         tooltip=[
-            alt.Tooltip(
-                "Measure:N"
-            ),
+            "Measure:N",
             alt.Tooltip(
                 "Value:Q",
                 format=".4f",
@@ -2827,13 +2757,6 @@ st.altair_chart(
     width="stretch",
 )
 
-st.caption(
-    "Epistemic uncertainty is estimated from disagreement among the "
-    "three model probabilities. Aleatoric uncertainty is represented "
-    "using Bernoulli entropy. These are research-oriented uncertainty "
-    "measures and are not clinical confidence scores."
-)
-
 
 # ==============================================================================
 # FAIRNESS
@@ -2843,10 +2766,12 @@ st.subheader(
     "8. Algorithmic fairness audit"
 )
 
+fairness_data = df.loc[
+    X_test.index
+].copy()
+
 fairness = fairness_audit(
-    df.loc[
-        X_test.index
-    ],
+    fairness_data,
     test_ensemble_probability,
     threshold,
 )
@@ -2925,12 +2850,8 @@ else:
             ),
             xOffset="Metric:N",
             tooltip=[
-                alt.Tooltip(
-                    "Age group:N"
-                ),
-                alt.Tooltip(
-                    "Metric:N"
-                ),
+                "Age group:N",
+                "Metric:N",
                 alt.Tooltip(
                     "Rate:Q",
                     format=".3f",
@@ -2977,11 +2898,11 @@ if BMI_COLUMN in X_train.columns:
         BMI_BINS,
     )
 
-    psi_col1, psi_col2 = (
-        st.columns(2)
+    psi_columns = st.columns(
+        2
     )
 
-    with psi_col1:
+    with psi_columns[0]:
 
         st.metric(
             "BMI PSI",
@@ -2994,7 +2915,7 @@ if BMI_COLUMN in X_train.columns:
             ),
         )
 
-    with psi_col2:
+    with psi_columns[1]:
 
         if pd.isna(
             bmi_psi
@@ -3039,11 +2960,13 @@ if BMI_COLUMN in X_train.columns:
     bmi_distribution = pd.DataFrame(
         {
             "Population": (
-                ["Training"] * len(
+                ["Training"]
+                * len(
                     bmi_reference
                 )
                 +
-                ["Uploaded"] * len(
+                ["Uploaded"]
+                * len(
                     bmi_current
                 )
             ),
@@ -3086,9 +3009,7 @@ if BMI_COLUMN in X_train.columns:
                 title="Population",
             ),
             tooltip=[
-                alt.Tooltip(
-                    "Population:N"
-                ),
+                "Population:N",
                 alt.Tooltip(
                     "BMI:Q",
                     format=".2f",
@@ -3114,9 +3035,8 @@ if BMI_COLUMN in X_train.columns:
     )
 
     st.caption(
-        f"PSI threshold used for monitoring: "
-        f"{PSI_THRESHOLD:.2f}. PSI is a monitoring statistic "
-        "and does not modify the conformal prediction threshold."
+        f"PSI monitoring threshold: {PSI_THRESHOLD:.2f}. "
+        "PSI does not modify the conformal threshold."
     )
 
 else:
@@ -3210,13 +3130,13 @@ else:
     )
 
     st.caption(
-        "Feature importance represents model association/contribution "
-        "within the fitted predictive system. It is not causal evidence."
+        "Feature importance describes predictive model behavior. "
+        "It is not evidence of causal effects."
     )
 
 
 # ==============================================================================
-# FULL PREDICTION OUTPUT
+# DATASET-LEVEL INFERENCE
 # ==============================================================================
 
 st.subheader(
@@ -3273,7 +3193,6 @@ all_prediction_label = np.where(
 
 (
     all_conformal_sets,
-    _,
     _,
 ) = conformal_prediction(
     calibration_ensemble_probability,
@@ -3376,7 +3295,7 @@ st.dataframe(
 
 
 # ==============================================================================
-# DOWNLOAD
+# CSV EXPORT
 # ==============================================================================
 
 st.subheader(
