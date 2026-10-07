@@ -1700,6 +1700,48 @@ def normalized_column_name(value: str) -> str:
     return " ".join(text.split())
 
 
+def derive_landmark_mms(value: pd.Series) -> pd.Series:
+    """Derive the 28-week MMS predictor from the raw CBGS start-week field.
+
+    1 = supplementation started at or before week 28;
+    0 = supplementation started after week 28;
+    missing = start timing unavailable or non-numeric.
+    """
+    numeric = pd.to_numeric(value, errors="coerce")
+    result = pd.Series(np.nan, index=value.index, dtype=float)
+    valid = numeric.notna()
+    result.loc[valid] = (numeric.loc[valid] <= LANDMARK_WEEK).astype(float)
+    return result
+
+
+def build_landmark_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Construct leakage-aware landmark predictors from raw CBGS columns."""
+    out = df.copy()
+    canonical = "MMS started by 28 weeks"
+
+    if canonical in out.columns:
+        out[canonical] = pd.to_numeric(out[canonical], errors="coerce")
+        return out
+
+    raw_candidates = [
+        "Relative to the start of pregnancy, when did multiple micronutrient supplementation start?",
+        "supplementation start timing",
+        "mmn start",
+        "mms start",
+    ]
+    normalized = {normalized_column_name(c): c for c in out.columns}
+    source = None
+    for candidate in raw_candidates:
+        source = normalized.get(normalized_column_name(candidate))
+        if source is not None:
+            break
+
+    if source is not None:
+        out[canonical] = derive_landmark_mms(out[source])
+
+    return out
+
+
 def suggest_column_mapping(columns: List[str]) -> Dict[str, str]:
     """Suggest a one-to-one mapping from uploaded names to canonical variables."""
     normalized = {normalized_column_name(c): c for c in columns}
@@ -2376,6 +2418,11 @@ try:
     df = clean_dataframe(
         df
     )
+
+    # The strict model uses a derived 28-week MMS feature. The original
+    # dataCBGS_dataset contains the raw MMS start-week field, not the derived
+    # column, so construct it before predictor validation.
+    df = build_landmark_features(df)
 
 except Exception as exc:
 
