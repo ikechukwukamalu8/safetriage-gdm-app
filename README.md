@@ -71,7 +71,9 @@ P(GDM)=\frac{P_{RF}+P_{XGB}+P_{LR}}{3}.
 
 ### Threshold selection
 
-The classification threshold is selected using the calibration partition only. The test set is not used to optimize the threshold.
+The classification threshold is selected using the calibration partition only. The test set is not used to optimize the threshold. The selected threshold is applied unchanged to the equal-weight ensemble and, for transparent model comparison, to the three individual models. Individual-model rows therefore represent performance at the common ensemble-selected threshold, not individually optimized thresholds.
+
+The app also reports the number of GDM and No GDM predictions produced on the untouched test set at that frozen threshold. This makes cases such as zero sensitivity directly auditable rather than silently changing the threshold after inspecting test results.
 
 ### Conformal prediction
 

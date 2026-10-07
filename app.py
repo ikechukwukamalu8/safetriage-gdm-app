@@ -2342,8 +2342,6 @@ if analysis_mode == "External Validation":
     st.stop()
 
 
-st.warning(RESEARCH_DISCLAIMER)
-
 # ==============================================================================
 # DATA UPLOAD
 # ==============================================================================
@@ -2900,6 +2898,42 @@ st.dataframe(
     hide_index=True,
 )
 
+# Transparent threshold diagnostic: shows how many positive predictions each
+# model and the equal-weight ensemble make on the untouched test set.
+test_prediction_counts = []
+for model_name in EXPECTED_MODEL_ORDER:
+    model_probability = model_probabilities[model_name]["test"]
+    model_prediction = (model_probability >= threshold).astype(int)
+    test_prediction_counts.append(
+        {
+            "Model": model_name,
+            "Predicted GDM": int(model_prediction.sum()),
+            "Predicted No GDM": int((model_prediction == 0).sum()),
+        }
+    )
+
+ensemble_prediction = (test_ensemble_probability >= threshold).astype(int)
+test_prediction_counts.append(
+    {
+        "Model": "Equal-weight ensemble",
+        "Predicted GDM": int(ensemble_prediction.sum()),
+        "Predicted No GDM": int((ensemble_prediction == 0).sum()),
+    }
+)
+
+st.caption(
+    "Threshold diagnostic: counts below show the number of positive and "
+    "negative predictions produced on the untouched test set at the "
+    "calibration-derived threshold. A sensitivity of 0 means no true GDM "
+    "cases were classified as GDM at this threshold; it is not treated as "
+    "a test-set threshold optimization problem."
+)
+st.dataframe(
+    pd.DataFrame(test_prediction_counts),
+    width="stretch",
+    hide_index=True,
+)
+
 
 # ==============================================================================
 # MODEL-LEVEL PERFORMANCE
@@ -2907,6 +2941,12 @@ st.dataframe(
 
 st.markdown(
     "### Individual model performance"
+)
+
+st.caption(
+    "Individual models are evaluated on the untouched test set using the "
+    "same ensemble-selected threshold shown above. These are not "
+    "individually optimized model thresholds."
 )
 
 individual_records = []
@@ -3539,11 +3579,9 @@ not be interpreted as causal effects.
 st.divider()
 
 st.caption(
-    "SafeTriage-GDM is a research prototype. It has not been clinically "
-    "validated, externally validated, prospectively evaluated, or approved "
-    "as a medical device. Model predictions, uncertainty estimates, "
-    "conformal prediction sets, fairness metrics, and drift statistics "
-    "should be interpreted only within the research context."
+    "Research prototype — not clinically validated, prospectively evaluated, "
+    "or approved as a medical device. Results should be interpreted only "
+    "within the research context."
 )
 
 st.caption(
