@@ -23,7 +23,7 @@
 
 import io
 import warnings
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
@@ -347,6 +347,11 @@ EXPECTED_MODEL_ORDER = [
 ]
 
 EXPECTED_MODEL_KEYS = set(EXPECTED_MODEL_ORDER)
+
+# Inner development-set tuning. Hyperparameters are selected using only the
+# original training partition; calibration and test partitions remain untouched.
+TUNING_FOLDS = 5
+TUNING_ENABLED = True
 
 AGE_GROUPS = [
     "<25",
@@ -901,35 +906,146 @@ def make_preprocessor(
 # ==============================================================================
 
 
-def create_models() -> Dict[str, object]:
+def create_models(model_params: Optional[Dict[str, Dict]] = None) -> Dict[str, object]:
+    """Create the fixed three-model architecture, optionally with tuned parameters."""
+    params = model_params or {}
+
+    rf_params = {
+        "n_estimators": 300,
+        "min_samples_leaf": 3,
+        "random_state": RANDOM_STATE,
+        "n_jobs": -1,
+    }
+    rf_params.update(params.get("Random Forest", {}))
+
+    xgb_params = {
+        "n_estimators": 300,
+        "max_depth": 3,
+        "learning_rate": 0.03,
+        "subsample": 0.90,
+        "colsample_bytree": 0.90,
+        "objective": "binary:logistic",
+        "eval_metric": "logloss",
+        "random_state": RANDOM_STATE,
+        "n_jobs": -1,
+    }
+    xgb_params.update(params.get("XGBoost", {}))
+
+    lr_params = {
+        "max_iter": 5000,
+        "solver": "lbfgs",
+        "random_state": RANDOM_STATE,
+    }
+    lr_params.update(params.get("Logistic Regression", {}))
 
     return {
-
-        "Random Forest": RandomForestClassifier(
-            n_estimators=300,
-            min_samples_leaf=3,
-            random_state=RANDOM_STATE,
-            n_jobs=-1,
-        ),
-
-        "XGBoost": XGBClassifier(
-            n_estimators=300,
-            max_depth=3,
-            learning_rate=0.03,
-            subsample=0.90,
-            colsample_bytree=0.90,
-            objective="binary:logistic",
-            eval_metric="logloss",
-            random_state=RANDOM_STATE,
-            n_jobs=-1,
-        ),
-
-        "Logistic Regression": LogisticRegression(
-            max_iter=5000,
-            solver="lbfgs",
-            random_state=RANDOM_STATE,
-        ),
+        "Random Forest": RandomForestClassifier(**rf_params),
+        "XGBoost": XGBClassifier(**xgb_params),
+        "Logistic Regression": LogisticRegression(**lr_params),
     }
+
+
+def _candidate_model_parameters() -> Dict[str, List[Dict]]:
+    """Small, deliberately bounded tuning spaces suitable for the research app."""
+    return {
+        "Random Forest": [
+            {"n_estimators": 300, "max_depth": None, "min_samples_leaf": 2, "max_features": "sqrt"},
+            {"n_estimators": 300, "max_depth": 4, "min_samples_leaf": 2, "max_features": "sqrt"},
+            {"n_estimators": 300, "max_depth": 6, "min_samples_leaf": 3, "max_features": "sqrt"},
+            {"n_estimators": 300, "max_depth": None, "min_samples_leaf": 5, "max_features": "sqrt"},
+            {"n_estimators": 300, "max_depth": 4, "min_samples_leaf": 5, "max_features": 1.0},
+        ],
+        "XGBoost": [
+            {"n_estimators": 200, "max_depth": 2, "learning_rate": 0.03, "min_child_weight": 1, "subsample": 0.9, "colsample_bytree": 0.9},
+            {"n_estimators": 300, "max_depth": 2, "learning_rate": 0.03, "min_child_weight": 3, "subsample": 0.9, "colsample_bytree": 0.9},
+            {"n_estimators": 300, "max_depth": 3, "learning_rate": 0.03, "min_child_weight": 1, "subsample": 0.9, "colsample_bytree": 0.9},
+            {"n_estimators": 300, "max_depth": 2, "learning_rate": 0.05, "min_child_weight": 1, "subsample": 0.8, "colsample_bytree": 0.9},
+            {"n_estimators": 300, "max_depth": 3, "learning_rate": 0.05, "min_child_weight": 3, "subsample": 0.8, "colsample_bytree": 0.9},
+        ],
+        "Logistic Regression": [
+            {"C": 0.01},
+            {"C": 0.1},
+            {"C": 1.0},
+            {"C": 10.0},
+        ],
+    }
+
+
+@st.cache_data(show_spinner=False)
+def tune_models_on_training_data(X_train: pd.DataFrame, y_train: pd.Series):
+    """Tune the three fixed model families using only the training partition.
+
+    Each CV fold independently applies ROSE-style balancing and preprocessing to
+    its fold-training data. The validation fold remains naturally distributed.
+    This prevents the calibration and final test partitions from influencing
+    hyperparameter selection.
+    """
+    from sklearn.model_selection import StratifiedKFold
+
+    cv = StratifiedKFold(
+        n_splits=TUNING_FOLDS,
+        shuffle=True,
+        random_state=RANDOM_STATE,
+    )
+    candidates = _candidate_model_parameters()
+    tuning_rows = []
+    best_params = {}
+
+    for model_name in EXPECTED_MODEL_ORDER:
+        best_key = None
+        best_score = -np.inf
+        best_pr = -np.inf
+
+        for candidate_index, candidate in enumerate(candidates[model_name], start=1):
+            fold_auc = []
+            fold_pr = []
+
+            for fold_number, (train_idx, valid_idx) in enumerate(cv.split(X_train, y_train), start=1):
+                X_fold = X_train.iloc[train_idx].copy()
+                y_fold = y_train.iloc[train_idx].copy()
+                X_valid = X_train.iloc[valid_idx].copy()
+                y_valid = y_train.iloc[valid_idx].copy()
+
+                X_bal, y_bal, _ = rose_style_balance(
+                    X_fold, y_fold,
+                    random_state=RANDOM_STATE + fold_number,
+                    noise_fraction=0.10,
+                )
+                fold_preprocessor = make_preprocessor(X_bal)
+                X_bal_processed = fold_preprocessor.fit_transform(X_bal)
+                X_valid_processed = fold_preprocessor.transform(X_valid)
+
+                model = create_models({model_name: candidate})[model_name]
+                model.fit(X_bal_processed, y_bal)
+                probability = model.predict_proba(X_valid_processed)[:, 1]
+
+                try:
+                    fold_auc.append(roc_auc_score(y_valid, probability))
+                except Exception:
+                    fold_auc.append(np.nan)
+                try:
+                    fold_pr.append(average_precision_score(y_valid, probability))
+                except Exception:
+                    fold_pr.append(np.nan)
+
+            mean_auc = float(np.nanmean(fold_auc))
+            mean_pr = float(np.nanmean(fold_pr))
+            tuning_rows.append({
+                "Model": model_name,
+                "Candidate": candidate_index,
+                "CV ROC-AUC": mean_auc,
+                "CV PR-AUC": mean_pr,
+                "Parameters": str(candidate),
+            })
+
+            if (mean_auc > best_score) or (np.isclose(mean_auc, best_score) and mean_pr > best_pr):
+                best_score = mean_auc
+                best_pr = mean_pr
+                best_key = candidate
+
+        best_params[model_name] = best_key
+
+    return best_params, pd.DataFrame(tuning_rows)
 
 
 # ==============================================================================
@@ -942,6 +1058,7 @@ def train_models(
     y_train: pd.Series,
     X_calibration: pd.DataFrame,
     X_test: pd.DataFrame,
+    model_params: Optional[Dict[str, Dict]] = None,
 ):
 
     X_train_balanced, y_train_balanced, rose_information = (
@@ -971,7 +1088,7 @@ def train_models(
         X_test
     )
 
-    models = create_models()
+    models = create_models(model_params)
 
     fitted_models = {}
 
@@ -2692,6 +2809,42 @@ st.subheader(
     "3. Model training"
 )
 
+if TUNING_ENABLED:
+
+    st.info(
+        "Hyperparameter tuning uses 5-fold stratified cross-validation inside "
+        "the training partition only. ROSE-style balancing and preprocessing "
+        "are repeated independently within each inner fold; calibration and "
+        "test data are not used for tuning."
+    )
+
+    with st.spinner("Tuning Random Forest, XGBoost, and Logistic Regression on the training partition..."):
+        try:
+            tuned_model_params, tuning_table = tune_models_on_training_data(X_train, y_train)
+        except Exception as exc:
+            st.warning("Inner tuning failed; the prespecified model parameters will be used instead.")
+            st.exception(exc)
+            tuned_model_params = {}
+            tuning_table = pd.DataFrame()
+else:
+    tuned_model_params = {}
+    tuning_table = pd.DataFrame()
+
+if tuned_model_params:
+    st.markdown("### Training-partition hyperparameter selection")
+    tuning_summary = pd.DataFrame([
+        {"Model": name, "Selected parameters": str(params)}
+        for name, params in tuned_model_params.items()
+    ])
+    st.dataframe(tuning_summary, width="stretch", hide_index=True)
+    if not tuning_table.empty:
+        with st.expander("View inner cross-validation tuning results"):
+            st.dataframe(
+                tuning_table.sort_values(["Model", "CV ROC-AUC", "CV PR-AUC"], ascending=[True, False, False]).round(4),
+                width="stretch",
+                hide_index=True,
+            )
+
 with st.spinner(
     "Training Random Forest, XGBoost, and Logistic Regression..."
 ):
@@ -2711,6 +2864,7 @@ with st.spinner(
             y_train,
             X_calibration,
             X_test,
+            model_params=tuned_model_params,
         )
 
     except Exception as exc:
@@ -3078,6 +3232,27 @@ st.metric(
 st.metric(
     "Observed test-set coverage",
     f"{test_conformal_coverage:.1%}",
+)
+
+conformal_counts = (
+    pd.Series(conformal_sets, name="Prediction set")
+    .value_counts()
+    .rename_axis("Prediction set")
+    .reset_index(name="Count")
+)
+conformal_counts["Percent"] = conformal_counts["Count"] / len(conformal_sets) * 100
+
+st.markdown("### Conformal prediction-set composition")
+st.dataframe(
+    conformal_counts.round({"Percent": 1}),
+    width="stretch",
+    hide_index=True,
+)
+st.caption(
+    "Coverage and prediction-set composition answer different questions: "
+    "coverage asks whether the true outcome was retained, while composition "
+    "shows how often the conformal procedure returned a single outcome versus "
+    "an ambiguous set containing both outcomes."
 )
 
 st.caption(
