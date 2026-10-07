@@ -8,11 +8,17 @@ SafeTriage-GDM is a research-oriented Streamlit application for uncertainty-awar
 
 > **Important:** SafeTriage-GDM is a research prototype. It is **not a medical device** and must not be used as a substitute for professional medical diagnosis, treatment, or clinical decision-making.
 
+## 🚀 Live Application
+
+👉 **[Launch SafeTriage-GDM](https://safetriage-gdm-app-3v5zd7afo2bxevoifgfjmw.streamlit.app/)**
+
+**GitHub Repository:** [ikechukwukamalu8/safetriage-gdm-app](https://github.com/ikechukwukamalu8/safetriage-gdm-app)
+
 ---
 
 # Predictor schema
 
-The application uses a parsimonious set of **10 approved antepartum predictors**. Predictor selection is based on the available CBGS data structure and leakage-aware modelling considerations.
+The application uses a parsimonious set of **9 approved antepartum predictors**. Predictor selection is based on the available CBGS data structure and leakage-aware modelling considerations.
 
 
 
@@ -29,7 +35,6 @@ Relative to the start of pregnancy, when did multiple micronutrient supplementat
 
 Did the mothers just supplement with multiple micronutrients during pregnancy and nothing else?
 
-For how many weeks were multiple micronutrients taken?
 
 Mother's pre-pregnancy BMI (kg/m2)
 
@@ -47,6 +52,16 @@ Gestational diabetes?
 ```
 
 where `No = 0` and `Yes = 1`.
+
+### Micronutrient supplementation timing and duration
+
+The CBGS dataset contains supplementation start timing, stop timing, and a recorded duration variable. A direct check of the uploaded CBGS data showed that, for all 427 observations with all three values available, the recorded duration is exactly:
+
+```text
+Duration = Stop timing - Start timing
+```
+
+Therefore, the recorded duration variable is mathematically redundant with the start and stop timing variables and is **not included as a separate model predictor**. The model retains the start and stop timing variables so that both timing and duration information remain represented without duplicating the same information.
 
 ---
 
@@ -117,7 +132,7 @@ Synthetic external-validation demonstration dataset.
 - 1,000 labeled observations
 - 100 unlabeled observations
 - 150 GDM / 850 No GDM among labeled observations
-- 10 approved predictors
+- 9 approved predictors
 - Canonical CBGS-style predictor names
 - Synthetic observations only
 
@@ -137,7 +152,6 @@ mmn_supplementation
 mmn_start
 mmn_stop
 only_mmn
-mmn_duration
 prepreg_bmi
 maternal_age
 smoking
@@ -154,7 +168,7 @@ Synthetic stress-test dataset designed for fairness and population-stability dem
 - 1,500 rows
 - 1,000 labeled observations
 - 500 unlabeled observations
-- 10 approved predictors
+- 9 approved predictors
 - shifted age/BMI distribution relative to the main synthetic dataset
 - intended for age-group fairness and BMI PSI monitoring demonstrations
 
@@ -585,7 +599,7 @@ plotly>=5.24,<7
 Upload dataset
       │
       ▼
-Validate target + 10 approved predictors
+Validate target + 9 approved predictors
       │
       ▼
 Identify labeled observations
