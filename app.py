@@ -28,7 +28,8 @@ from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
 import streamlit as st
-import matplotlib.pyplot as plt
+import plotly.express as px
+import plotly.graph_objects as go
 
 from sklearn.experimental import enable_iterative_imputer  # noqa: F401
 from sklearn.impute import IterativeImputer, SimpleImputer
@@ -61,8 +62,243 @@ warnings.filterwarnings("ignore")
 
 
 # ==============================================================================
+# VISUALIZATION HELPERS
+# ==============================================================================
+
+
+def render_bar_chart(df_chart, x, y, title, y_title=None, text=None, horizontal=False):
+    """Render a consistent interactive Plotly bar chart."""
+    fig = px.bar(
+        df_chart,
+        x=x,
+        y=y,
+        text=text,
+        title=title,
+        orientation="h" if horizontal else "v",
+    )
+    if y_title:
+        fig.update_yaxes(title=y_title)
+    fig.update_layout(margin=dict(l=20, r=20, t=55, b=20))
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_model_performance_chart(individual_table):
+    """Compare the three locked models across core discrimination metrics."""
+    plot_df = individual_table[[
+        "Model", "ROC-AUC", "PR-AUC", "Sensitivity", "Specificity", "F1"
+    ]].copy()
+    long_df = plot_df.melt(id_vars="Model", var_name="Metric", value_name="Value")
+    fig = px.bar(
+        long_df,
+        x="Model",
+        y="Value",
+        color="Metric",
+        barmode="group",
+        title="Individual Model Performance",
+    )
+    fig.update_yaxes(range=[0, 1], title="Score")
+    fig.update_layout(margin=dict(l=20, r=20, t=55, b=20))
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_roc_pr_curves(y_true, probability_dict, title_prefix="Test-set"):
+    """Render ROC and precision-recall curves for the locked models plus ensemble."""
+    roc_fig = go.Figure()
+    pr_fig = go.Figure()
+
+    for model_name, probability in probability_dict.items():
+        fpr, tpr, _ = roc_curve(y_true, probability)
+        roc_auc = roc_auc_score(y_true, probability)
+        roc_fig.add_trace(
+            go.Scatter(
+                x=fpr, y=tpr, mode="lines",
+                name=f"{model_name} (AUC={roc_auc:.3f})",
+            )
+        )
+
+        precision, recall, _ = precision_recall_curve(y_true, probability)
+        pr_auc = average_precision_score(y_true, probability)
+        pr_fig.add_trace(
+            go.Scatter(
+                x=recall, y=precision, mode="lines",
+                name=f"{model_name} (AP={pr_auc:.3f})",
+            )
+        )
+
+    roc_fig.add_trace(
+        go.Scatter(
+            x=[0, 1], y=[0, 1], mode="lines",
+            name="Chance", line=dict(dash="dash"),
+        )
+    )
+    roc_fig.update_layout(
+        title=f"{title_prefix} ROC Curves",
+        xaxis_title="False positive rate",
+        yaxis_title="True positive rate",
+        xaxis=dict(range=[0, 1]), yaxis=dict(range=[0, 1]),
+        margin=dict(l=20, r=20, t=55, b=20),
+    )
+    pr_fig.update_layout(
+        title=f"{title_prefix} Precision–Recall Curves",
+        xaxis_title="Recall",
+        yaxis_title="Precision",
+        xaxis=dict(range=[0, 1]), yaxis=dict(range=[0, 1]),
+        margin=dict(l=20, r=20, t=55, b=20),
+    )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.plotly_chart(roc_fig, use_container_width=True)
+    with c2:
+        st.plotly_chart(pr_fig, use_container_width=True)
+
+
+def render_confusion_matrix(y_true, y_pred, title="Ensemble Confusion Matrix"):
+    """Render an annotated 2x2 confusion matrix."""
+    cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+    fig = px.imshow(
+        cm,
+        text_auto=True,
+        x=["Predicted No GDM", "Predicted GDM"],
+        y=["Actual No GDM", "Actual GDM"],
+        title=title,
+        labels={"x": "Prediction", "y": "Observed outcome", "color": "Count"},
+    )
+    fig.update_layout(margin=dict(l=20, r=20, t=55, b=20))
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_threshold_curve(threshold_table, selected_threshold):
+    """Show calibration-derived sensitivity, specificity and balanced accuracy."""
+    plot_df = threshold_table.copy()
+    fig = go.Figure()
+    for column in ["sensitivity", "specificity", "balanced_accuracy"]:
+        fig.add_trace(
+            go.Scatter(
+                x=plot_df["threshold"],
+                y=plot_df[column],
+                mode="lines",
+                name=column.replace("_", " ").title(),
+            )
+        )
+    fig.add_vline(x=selected_threshold, line_dash="dash", annotation_text=f"Selected = {selected_threshold:.3f}")
+    fig.update_layout(
+        title="Calibration Threshold Selection",
+        xaxis_title="Decision threshold",
+        yaxis_title="Score",
+        xaxis=dict(range=[0.05, 0.95]), yaxis=dict(range=[0, 1]),
+        margin=dict(l=20, r=20, t=55, b=20),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_conformal_chart(conformal_sets, title="Conformal Prediction Sets"):
+    counts = (
+        pd.Series(conformal_sets)
+        .value_counts()
+        .rename_axis("Conformal set")
+        .reset_index(name="Count")
+    )
+    fig = px.bar(
+        counts, x="Conformal set", y="Count", text="Count",
+        title=title,
+    )
+    fig.update_layout(margin=dict(l=20, r=20, t=55, b=20))
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_uncertainty_chart(uncertainty_dict, title="Ensemble Uncertainty"):
+    uncertainty_df = pd.DataFrame({
+        "Measure": [
+            "Epistemic uncertainty",
+            "Aleatoric uncertainty",
+            "Predictive entropy",
+            "Mutual information",
+        ],
+        "Mean": [
+            np.mean(uncertainty_dict["epistemic_uncertainty"]),
+            np.mean(uncertainty_dict["aleatoric_uncertainty"]),
+            np.mean(uncertainty_dict["predictive_entropy"]),
+            np.mean(uncertainty_dict["mutual_information"]),
+        ],
+    })
+    fig = px.bar(
+        uncertainty_df, x="Measure", y="Mean", text="Mean",
+        title=title,
+    )
+    fig.update_yaxes(rangemode="tozero", title="Mean value")
+    fig.update_layout(margin=dict(l=20, r=20, t=55, b=20))
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_fairness_chart(fairness, title="Age-group Fairness Audit"):
+    if fairness.empty:
+        return
+    plot_df = fairness[["Age group", "Selection rate", "False-positive rate"]].melt(
+        id_vars="Age group", var_name="Measure", value_name="Rate"
+    )
+    fig = px.bar(
+        plot_df, x="Age group", y="Rate", color="Measure",
+        barmode="group", title=title,
+    )
+    fig.update_yaxes(range=[0, 1], title="Rate")
+    fig.update_layout(margin=dict(l=20, r=20, t=55, b=20))
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_bmi_psi_chart(reference_bmi, current_bmi, bins, psi_value, title="BMI Population Stability"):
+    labels = ["Underweight", "Normal", "Overweight", "Obesity I", "Obesity II+"]
+    reference = pd.to_numeric(reference_bmi, errors="coerce").dropna()
+    current = pd.to_numeric(current_bmi, errors="coerce").dropna()
+    if reference.empty or current.empty:
+        return
+    ref_props = pd.cut(reference, bins=bins, include_lowest=True).value_counts(sort=False, normalize=True)
+    cur_props = pd.cut(current, bins=bins, include_lowest=True).value_counts(sort=False, normalize=True)
+    plot_df = pd.DataFrame({
+        "BMI category": labels,
+        "Reference": ref_props.to_numpy() * 100,
+        "Current / uploaded": cur_props.to_numpy() * 100,
+    }).melt(id_vars="BMI category", var_name="Population", value_name="Percent")
+    fig = px.bar(
+        plot_df, x="BMI category", y="Percent", color="Population",
+        barmode="group", title=f"{title} (PSI={psi_value:.4f})",
+    )
+    fig.update_yaxes(title="Percent of observations")
+    fig.update_layout(margin=dict(l=20, r=20, t=55, b=20))
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_feature_importance(feature_importance, top_n=15):
+    plot_df = feature_importance.head(top_n).sort_values("importance", ascending=True)
+    fig = px.bar(
+        plot_df, x="importance", y="original_variable", orientation="h",
+        title=f"Top {min(top_n, len(feature_importance))} Predictive Feature Contributions",
+    )
+    fig.update_xaxes(title="Mean model-based importance")
+    fig.update_yaxes(title="Predictor")
+    fig.update_layout(margin=dict(l=20, r=20, t=55, b=20))
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_probability_distribution(y_true, probability, title="Test-set GDM Probability Distribution"):
+    plot_df = pd.DataFrame({
+        "Observed outcome": np.where(np.asarray(y_true) == 1, "GDM", "No GDM"),
+        "Predicted probability": probability,
+    })
+    fig = px.histogram(
+        plot_df, x="Predicted probability", color="Observed outcome",
+        barmode="overlay", nbins=20, opacity=0.65, title=title,
+    )
+    fig.update_xaxes(range=[0, 1], title="Ensemble P(GDM)")
+    fig.update_yaxes(title="Number of observations")
+    fig.update_layout(margin=dict(l=20, r=20, t=55, b=20))
+    st.plotly_chart(fig, use_container_width=True)
+
+
+# ==============================================================================
 # APPLICATION CONSTANTS
 # ==============================================================================
+
 
 APP_TITLE = "SafeTriage-GDM"
 
@@ -266,6 +502,22 @@ with st.sidebar:
     st.caption(
         "No class weighting, SMOTETomek, or post-hoc sigmoid calibration "
         "is used."
+    )
+
+    st.caption(
+        "Interactive Plotly visualizations are generated from the existing "
+        "model outputs; they do not alter the modelling pipeline."
+    )
+
+    st.divider()
+
+    analysis_mode = st.radio(
+        "Analysis mode",
+        [
+            "Build & Evaluate Model",
+            "External Validation",
+        ],
+        index=0,
     )
 
 
@@ -1408,210 +1660,579 @@ def aggregate_feature_importance(
 
 
 # ==============================================================================
-# VISUALIZATION HELPERS
+# FLEXIBLE DATASET SCHEMA MAPPING
 # ==============================================================================
 
+PREDICTOR_LABELS = {
+    "Evidence of maternal anaemia?": "Maternal anaemia",
+    "Do we have data related to multiple micronutrient supplementation?": "Micronutrient data available",
+    "Did the mother supplement with multiple micronutrients during pregnancy?": "Micronutrient supplementation",
+    "Relative to the start of pregnancy, when did multiple micronutrient supplementation start?": "Supplementation start timing",
+    "Relative to the start of pregnancy, when did multiple micronutrient supplementation stop?": "Supplementation stop timing",
+    "Did the mothers just supplement with multiple micronutrients during pregnancy and nothing else?": "Only micronutrient supplementation",
+    "For how many weeks were multiple micronutrients taken?": "Micronutrient duration (weeks)",
+    "Mother's pre-pregnancy BMI (kg/m2)": "Pre-pregnancy BMI",
+    "Mother's height (cm)": "Maternal height",
+    "Mother's weight before pregnancy (kg)": "Pre-pregnancy weight",
+    "Mother's age (years)": "Maternal age",
+    "Did the mother smoke during pregnancy?": "Smoking during pregnancy",
+    "Twin pregnancy?": "Twin pregnancy",
+    "Parity": "Parity",
+}
 
-def style_axis(ax, title=None, xlabel=None, ylabel=None):
-    if title:
-        ax.set_title(title, fontsize=12, fontweight="bold")
-    if xlabel:
-        ax.set_xlabel(xlabel)
-    if ylabel:
-        ax.set_ylabel(ylabel)
-    ax.grid(alpha=0.20, linestyle="--", linewidth=0.7)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-
-
-def plot_outcome_distribution(y):
-    counts = pd.Series(y).map({0: "No GDM", 1: "GDM"}).value_counts()
-    counts = counts.reindex(["No GDM", "GDM"], fill_value=0)
-    fig, ax = plt.subplots(figsize=(7, 4))
-    bars = ax.bar(counts.index, counts.values)
-    ax.bar_label(bars, fmt="%d", padding=3)
-    style_axis(ax, "Known GDM outcome distribution", "Outcome", "Number of observations")
-    ax.set_ylim(0, max(counts.values) * 1.15 if len(counts) else 1)
-    fig.tight_layout()
-    return fig
-
-
-def plot_split_distribution(y_train, y_calibration, y_test):
-    parts = [("Training", y_train), ("Calibration", y_calibration), ("Test", y_test)]
-    no_gdm = [int((y == 0).sum()) for _, y in parts]
-    gdm = [int((y == 1).sum()) for _, y in parts]
-    x = np.arange(len(parts))
-    width = 0.36
-    fig, ax = plt.subplots(figsize=(8, 4))
-    b1 = ax.bar(x - width / 2, no_gdm, width, label="No GDM")
-    b2 = ax.bar(x + width / 2, gdm, width, label="GDM")
-    ax.bar_label(b1, fmt="%d", padding=2, fontsize=8)
-    ax.bar_label(b2, fmt="%d", padding=2, fontsize=8)
-    ax.set_xticks(x, [name for name, _ in parts])
-    style_axis(ax, "Outcome counts by data partition", "Partition", "Number of observations")
-    ax.legend(frameon=False)
-    fig.tight_layout()
-    return fig
+COLUMN_ALIASES = {
+    "Evidence of maternal anaemia?": ["maternal anaemia", "maternal anemia", "anaemia", "anemia"],
+    "Do we have data related to multiple micronutrient supplementation?": ["micronutrient data available", "multiple micronutrient data", "mmn data", "mmn data available"],
+    "Did the mother supplement with multiple micronutrients during pregnancy?": ["micronutrient supplementation", "multiple micronutrient supplementation", "mmn supplementation"],
+    "Relative to the start of pregnancy, when did multiple micronutrient supplementation start?": ["supplementation start timing", "mmn start", "supplementation start"],
+    "Relative to the start of pregnancy, when did multiple micronutrient supplementation stop?": ["supplementation stop timing", "mmn stop", "supplementation stop"],
+    "Did the mothers just supplement with multiple micronutrients during pregnancy and nothing else?": ["only micronutrient supplementation", "only mmn", "micronutrients only"],
+    "For how many weeks were multiple micronutrients taken?": ["micronutrient duration weeks", "mmn duration", "supplementation duration", "weeks of supplementation"],
+    "Mother's pre-pregnancy BMI (kg/m2)": ["pre pregnancy bmi", "prepregnancy bmi", "prepreg bmi", "pre pregnancy body mass index", "bmi"],
+    "Mother's height (cm)": ["maternal height", "mother height", "height cm", "height"],
+    "Mother's weight before pregnancy (kg)": ["pre pregnancy weight", "prepregnancy weight", "prepreg weight", "maternal pre pregnancy weight", "weight before pregnancy"],
+    "Mother's age (years)": ["maternal age", "mother age", "age years", "age"],
+    "Did the mother smoke during pregnancy?": ["smoking during pregnancy", "maternal smoking", "smoked during pregnancy", "smoking"],
+    "Twin pregnancy?": ["twin pregnancy", "twins", "multiple pregnancy"],
+    "Parity": ["parity", "number of previous births", "birth order"],
+}
 
 
-def plot_threshold_selection(threshold_table, selected_threshold):
-    fig, ax = plt.subplots(figsize=(8, 4))
-    ax.plot(threshold_table["threshold"], threshold_table["sensitivity"], label="Sensitivity")
-    ax.plot(threshold_table["threshold"], threshold_table["specificity"], label="Specificity")
-    ax.plot(threshold_table["threshold"], threshold_table["balanced_accuracy"], label="Balanced accuracy", linewidth=2)
-    ax.axvline(selected_threshold, linestyle="--", linewidth=1.5, label=f"Selected threshold = {selected_threshold:.3f}")
-    style_axis(ax, "Calibration-derived threshold selection", "Decision threshold", "Metric")
-    ax.set_ylim(0, 1.05)
-    ax.legend(frameon=False)
-    fig.tight_layout()
-    return fig
+def normalized_column_name(value: str) -> str:
+    """Normalize column names for conservative automatic matching."""
+    text = str(value).strip().lower()
+    for token in ["_", "-", "?", "(", ")", "/", ":", ","]:
+        text = text.replace(token, " ")
+    return " ".join(text.split())
 
 
-def plot_roc_curves(y_true, model_probabilities, ensemble_probability):
-    fig, ax = plt.subplots(figsize=(8, 5))
-    for model_name in EXPECTED_MODEL_ORDER:
-        fpr, tpr, _ = roc_curve(y_true, model_probabilities[model_name])
-        auc_value = roc_auc_score(y_true, model_probabilities[model_name])
-        ax.plot(fpr, tpr, label=f"{model_name} (AUC={auc_value:.3f})")
-    fpr, tpr, _ = roc_curve(y_true, ensemble_probability)
-    ensemble_auc = roc_auc_score(y_true, ensemble_probability)
-    ax.plot(fpr, tpr, linewidth=2.5, label=f"Ensemble (AUC={ensemble_auc:.3f})")
-    ax.plot([0, 1], [0, 1], linestyle=":", linewidth=1)
-    style_axis(ax, "ROC curves on the untouched test set", "False-positive rate", "True-positive rate")
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1.05)
-    ax.legend(frameon=False, fontsize=8)
-    fig.tight_layout()
-    return fig
+def suggest_column_mapping(columns: List[str]) -> Dict[str, str]:
+    """Suggest a one-to-one mapping from uploaded names to canonical variables."""
+    normalized = {normalized_column_name(c): c for c in columns}
+    mapping = {}
+    used = set()
+    for canonical in APPROVED_PREDICTORS:
+        candidates = [canonical] + COLUMN_ALIASES.get(canonical, [])
+        for candidate in candidates:
+            source = normalized.get(normalized_column_name(candidate))
+            if source is not None and source not in used:
+                mapping[canonical] = source
+                used.add(source)
+                break
+    return mapping
 
 
-def plot_pr_curves(y_true, model_probabilities, ensemble_probability):
-    prevalence = np.mean(np.asarray(y_true) == 1)
-    fig, ax = plt.subplots(figsize=(8, 5))
-    for model_name in EXPECTED_MODEL_ORDER:
-        precision, recall, _ = precision_recall_curve(y_true, model_probabilities[model_name])
-        ap = average_precision_score(y_true, model_probabilities[model_name])
-        ax.plot(recall, precision, label=f"{model_name} (AP={ap:.3f})")
-    precision, recall, _ = precision_recall_curve(y_true, ensemble_probability)
-    ap = average_precision_score(y_true, ensemble_probability)
-    ax.plot(recall, precision, linewidth=2.5, label=f"Ensemble (AP={ap:.3f})")
-    ax.axhline(prevalence, linestyle=":", linewidth=1, label=f"Prevalence baseline={prevalence:.3f}")
-    style_axis(ax, "Precision–recall curves on the untouched test set", "Recall", "Precision")
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1.05)
-    ax.legend(frameon=False, fontsize=8)
-    fig.tight_layout()
-    return fig
+def schema_mapping_ui(
+    df: pd.DataFrame,
+    key_prefix: str,
+    require_target: bool,
+) -> Tuple[Dict[str, str], str]:
+    """Render an editable mapping from arbitrary uploaded columns to SafeTriage variables."""
+    columns = list(df.columns)
+    suggestions = suggest_column_mapping(columns)
+    mapping = {}
+    used = set()
 
+    st.markdown("#### Map uploaded columns to the SafeTriage-GDM schema")
+    st.caption(
+        "Column names and order may differ from the reference dataset. "
+        "Extra columns are ignored. Each required predictor must map to one "
+        "distinct uploaded column."
+    )
 
-def plot_confusion_matrix(y_true, predictions):
-    cm = confusion_matrix(y_true, predictions, labels=[0, 1])
-    fig, ax = plt.subplots(figsize=(5.5, 4.5))
-    image = ax.imshow(cm)
-    ax.set_xticks([0, 1], ["No GDM", "GDM"])
-    ax.set_yticks([0, 1], ["No GDM", "GDM"])
-    ax.set_xlabel("Predicted")
-    ax.set_ylabel("Actual")
-    ax.set_title("Ensemble confusion matrix", fontsize=12, fontweight="bold")
-    for i in range(2):
-        for j in range(2):
-            ax.text(j, i, f"{cm[i, j]:,}", ha="center", va="center", fontsize=13)
-    fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
-    fig.tight_layout()
-    return fig
+    with st.expander("Predictor mapping", expanded=True):
+        for canonical in APPROVED_PREDICTORS:
+            options = ["— Not mapped —"] + [c for c in columns if c not in used]
+            suggested = suggestions.get(canonical)
+            default_index = options.index(suggested) if suggested in options else 0
+            selected = st.selectbox(
+                PREDICTOR_LABELS.get(canonical, canonical),
+                options,
+                index=default_index,
+                key=f"{key_prefix}_{canonical}",
+                help=f"SafeTriage variable: {canonical}",
+            )
+            if selected != "— Not mapped —":
+                mapping[canonical] = selected
+                used.add(selected)
 
-
-def plot_probability_distribution(y_true, probability, threshold):
-    y_true = np.asarray(y_true).astype(int)
-    fig, ax = plt.subplots(figsize=(8, 4.5))
-    ax.hist(probability[y_true == 0], bins=20, alpha=0.60, label="Observed No GDM", density=True)
-    ax.hist(probability[y_true == 1], bins=20, alpha=0.60, label="Observed GDM", density=True)
-    ax.axvline(threshold, linestyle="--", linewidth=1.5, label=f"Threshold={threshold:.3f}")
-    style_axis(ax, "Ensemble predicted GDM probability", "Predicted P(GDM)", "Density")
-    ax.set_xlim(0, 1)
-    ax.legend(frameon=False)
-    fig.tight_layout()
-    return fig
-
-
-def plot_conformal_distribution(conformal_sets):
-    counts = pd.Series(conformal_sets).value_counts()
-    order = ["{No GDM}", "{GDM, No GDM}", "{GDM}", "{Uncertain}"]
-    counts = counts.reindex(order, fill_value=0)
-    fig, ax = plt.subplots(figsize=(8, 4))
-    bars = ax.bar(counts.index, counts.values)
-    ax.bar_label(bars, fmt="%d", padding=3)
-    style_axis(ax, "90% conformal prediction sets", "Prediction set", "Number of observations")
-    ax.tick_params(axis="x", rotation=10)
-    fig.tight_layout()
-    return fig
-
-
-def plot_uncertainty_distributions(uncertainty, conformal_sets):
-    labels = np.asarray(conformal_sets)
-    metrics = [
-        ("epistemic_uncertainty", "Epistemic uncertainty"),
-        ("aleatoric_uncertainty", "Aleatoric uncertainty"),
-        ("predictive_entropy", "Predictive entropy"),
+    target_aliases = [
+        TARGET_COLUMN,
+        "gdm",
+        "gdm status",
+        "gdm outcome",
+        "gestational diabetes",
+        "gestational diabetes mellitus",
     ]
-    fig, axes = plt.subplots(1, 3, figsize=(13, 4))
-    for ax, (key, title) in zip(axes, metrics):
-        for label in ["{No GDM}", "{GDM, No GDM}", "{GDM}"]:
-            values = uncertainty[key][labels == label]
-            if len(values):
-                ax.hist(values, bins=15, alpha=0.45, label=label)
-        style_axis(ax, title, "Value", "Count")
-    axes[-1].legend(frameon=False, fontsize=7)
-    fig.tight_layout()
-    return fig
+    normalized = {normalized_column_name(c): c for c in columns}
+    target_suggestion = None
+    for alias in target_aliases:
+        candidate = normalized.get(normalized_column_name(alias))
+        if candidate is not None and candidate not in used:
+            target_suggestion = candidate
+            break
+
+    if require_target:
+        target_options = ["— Not mapped —"] + [c for c in columns if c not in used]
+        default_index = target_options.index(target_suggestion) if target_suggestion in target_options else 0
+        target_source = st.selectbox(
+            "GDM outcome column",
+            target_options,
+            index=default_index,
+            key=f"{key_prefix}_target",
+            help="Yes/No, Y/N, 1/0, or equivalent binary outcome encodings are supported.",
+        )
+    else:
+        target_options = ["— No outcome / unlabeled external data —"] + [c for c in columns if c not in used]
+        default_index = target_options.index(target_suggestion) if target_suggestion in target_options else 0
+        target_source = st.selectbox(
+            "Optional GDM outcome column",
+            target_options,
+            index=default_index,
+            key=f"{key_prefix}_target",
+            help="Map this only if the external dataset contains a known GDM outcome. Leave unmapped for unlabeled inference.",
+        )
+
+    return mapping, target_source
 
 
-def plot_fairness_rates(fairness):
+def apply_schema_mapping(
+    df: pd.DataFrame,
+    predictor_mapping: Dict[str, str],
+    target_source: str = "",
+) -> pd.DataFrame:
+    """Create a canonical SafeTriage dataframe from an uploaded dataset."""
+    mapped = pd.DataFrame(index=df.index)
+    for canonical in APPROVED_PREDICTORS:
+        mapped[canonical] = df[predictor_mapping[canonical]]
+    if target_source and target_source != "— Not mapped —":
+        mapped[TARGET_COLUMN] = df[target_source]
+    return mapped
+
+
+def read_excel_upload(uploaded_file) -> pd.DataFrame:
+    """Read and clean an uploaded Excel workbook."""
+    return clean_dataframe(pd.read_excel(io.BytesIO(uploaded_file.getvalue())))
+
+
+def run_external_validation_mode():
+    """Develop a reference model once and evaluate it on an independent dataset."""
+
+    st.subheader("External Validation")
+    st.info(
+        "This mode separates model development from external evaluation. "
+        "The reference dataset determines preprocessing, ROSE balancing, "
+        "the decision threshold, and conformal calibration. The external "
+        "dataset is never used to retrain or recalibrate the frozen model."
+    )
+
+    st.markdown("### 1. Reference/development dataset")
+    reference_upload = st.file_uploader(
+        "Upload the reference dataset used to develop the model",
+        type=["xlsx", "xls"],
+        key="external_reference_upload",
+    )
+    if reference_upload is None:
+        st.caption(
+            "For a genuine external-validation study, this dataset should be "
+            "independent of the external population you are evaluating."
+        )
+        st.stop()
+
+    try:
+        reference_raw = read_excel_upload(reference_upload)
+    except Exception as exc:
+        st.error("The reference Excel file could not be read.")
+        st.exception(exc)
+        st.stop()
+
+    st.write(
+        f"Reference dataset: **{reference_raw.shape[0]:,} rows × "
+        f"{reference_raw.shape[1]:,} columns**"
+    )
+
+    reference_mapping, reference_target_source = schema_mapping_ui(
+        reference_raw,
+        "reference_mapping",
+        require_target=True,
+    )
+
+    missing_reference = [
+        c for c in APPROVED_PREDICTORS if c not in reference_mapping
+    ]
+    if missing_reference or reference_target_source in {"", "— Not mapped —"}:
+        st.error("Complete the reference predictor mapping and GDM outcome mapping before continuing.")
+        st.write("Unmapped predictors:", [PREDICTOR_LABELS[c] for c in missing_reference])
+        st.stop()
+
+    reference_df = apply_schema_mapping(
+        reference_raw,
+        reference_mapping,
+        reference_target_source,
+    )
+    reference_target = normalize_binary_target(reference_df[TARGET_COLUMN])
+    reference_labeled = reference_target.notna()
+
+    if reference_labeled.sum() < 30 or reference_target.loc[reference_labeled].nunique() < 2:
+        st.error("The reference dataset must contain at least 30 usable labeled rows and both GDM classes.")
+        st.stop()
+
+    st.markdown("### 2. Independent external dataset")
+    external_upload = st.file_uploader(
+        "Upload the independent external validation dataset",
+        type=["xlsx", "xls"],
+        key="external_validation_upload",
+    )
+    if external_upload is None:
+        st.caption(
+            "The external dataset may use different column names, a different "
+            "column order, additional columns, and may omit the GDM outcome."
+        )
+        st.stop()
+
+    try:
+        external_raw = read_excel_upload(external_upload)
+    except Exception as exc:
+        st.error("The external Excel file could not be read.")
+        st.exception(exc)
+        st.stop()
+
+    st.write(
+        f"External dataset: **{external_raw.shape[0]:,} rows × "
+        f"{external_raw.shape[1]:,} columns**"
+    )
+
+    external_mapping, external_target_source = schema_mapping_ui(
+        external_raw,
+        "external_mapping",
+        require_target=False,
+    )
+    missing_external = [
+        c for c in APPROVED_PREDICTORS if c not in external_mapping
+    ]
+    if missing_external:
+        st.error("The external dataset is missing one or more required predictor concepts.")
+        st.write("Unmapped predictors:", [PREDICTOR_LABELS[c] for c in missing_external])
+        st.stop()
+
+    if external_target_source == "— No outcome / unlabeled external data —":
+        external_target_source = ""
+
+    external_df = apply_schema_mapping(
+        external_raw,
+        external_mapping,
+        external_target_source,
+    )
+    external_target = (
+        normalize_binary_target(external_df[TARGET_COLUMN])
+        if TARGET_COLUMN in external_df.columns
+        else pd.Series(np.nan, index=external_df.index, dtype=float)
+    )
+
+    # ------------------------------------------------------------------
+    # Reference model development: 60/15/25, then freeze everything.
+    # ------------------------------------------------------------------
+    X_reference = reference_df.loc[reference_labeled, APPROVED_PREDICTORS].copy()
+    y_reference = reference_target.loc[reference_labeled].astype(int)
+
+    try:
+        X_development, X_reference_test, y_development, y_reference_test = train_test_split(
+            X_reference,
+            y_reference,
+            test_size=TEST_SIZE,
+            random_state=RANDOM_STATE,
+            stratify=y_reference,
+        )
+        X_train, X_calibration, y_train, y_calibration = train_test_split(
+            X_development,
+            y_development,
+            test_size=CALIBRATION_SIZE_WITHIN_DEVELOPMENT,
+            random_state=RANDOM_STATE,
+            stratify=y_development,
+        )
+    except Exception as exc:
+        st.error("The reference dataset could not be split into 60/15/25 stratified partitions.")
+        st.exception(exc)
+        st.stop()
+
+    with st.spinner("Developing and freezing the reference model..."):
+        try:
+            (
+                preprocessor,
+                fitted_models,
+                reference_probabilities,
+                rose_information,
+                _,
+                _,
+                _,
+            ) = train_models(
+                X_train,
+                y_train,
+                X_calibration,
+                X_reference_test,
+            )
+        except Exception as exc:
+            st.error("Reference model training failed.")
+            st.exception(exc)
+            st.stop()
+
+    if set(fitted_models.keys()) != EXPECTED_MODEL_KEYS:
+        st.error("The frozen architecture is invalid. SafeTriage-GDM requires Random Forest, XGBoost, and Logistic Regression.")
+        st.stop()
+
+    reference_calibration_ensemble = ensemble_probability(
+        {
+            model_name: reference_probabilities[model_name]["calibration"]
+            for model_name in EXPECTED_MODEL_ORDER
+        }
+    )
+
+    frozen_threshold, _ = select_threshold(
+        y_calibration,
+        reference_calibration_ensemble,
+    )
+
+    # External data are transformed by the already-fitted reference preprocessor.
+    external_processed = preprocessor.transform(
+        external_df[APPROVED_PREDICTORS]
+    )
+    external_probabilities = {
+        model_name: fitted_models[model_name].predict_proba(external_processed)[:, 1]
+        for model_name in EXPECTED_MODEL_ORDER
+    }
+    external_ensemble = ensemble_probability(external_probabilities)
+
+    external_conformal_sets, frozen_conformal_q, _ = conformal_prediction(
+        reference_calibration_ensemble,
+        y_calibration,
+        external_ensemble,
+        confidence=CONFORMAL_CONFIDENCE,
+    )
+
+    external_predictions = (external_ensemble >= frozen_threshold).astype(int)
+    external_uncertainty = calculate_uncertainty(external_probabilities)
+
+    st.success(
+        "Reference model frozen. The external dataset was evaluated without retraining, "
+        "rebalancing, threshold optimization, or conformal recalibration."
+    )
+
+    st.subheader("3. Frozen reference model")
+    ref_cols = st.columns(5)
+    ref_cols[0].metric("Reference labeled", f"{len(y_reference):,}")
+    ref_cols[1].metric("Training", f"{len(y_train):,}")
+    ref_cols[2].metric("Calibration", f"{len(y_calibration):,}")
+    ref_cols[3].metric("Synthetic GDM", f"{rose_information['synthetic_minority']:,}")
+    ref_cols[4].metric("Frozen threshold", f"{frozen_threshold:.3f}")
+
+    st.caption(
+        "The reference calibration partition alone determines the decision threshold "
+        "and the conformal nonconformity quantile used for the external dataset."
+    )
+
+    st.subheader("4. External validation performance")
+    external_labeled = external_target.notna()
+    if external_labeled.sum() >= 2 and external_target.loc[external_labeled].nunique() == 2:
+        y_external = external_target.loc[external_labeled].astype(int)
+        p_external = external_ensemble[external_labeled.to_numpy()]
+        external_metrics = calculate_metrics(
+            y_external,
+            p_external,
+            frozen_threshold,
+        )
+        metrics_table = pd.DataFrame(
+            {
+                "Metric": list(external_metrics.keys()),
+                "Value": [
+                    "NA" if pd.isna(v) else round(float(v), 4)
+                    for v in external_metrics.values()
+                ],
+            }
+        )
+        st.dataframe(metrics_table, width="stretch", hide_index=True)
+
+        external_curve_probabilities = {
+            model_name: external_probabilities[model_name][external_labeled.to_numpy()]
+            for model_name in EXPECTED_MODEL_ORDER
+        }
+        external_curve_probabilities["Ensemble"] = p_external
+        render_roc_pr_curves(y_external, external_curve_probabilities, "External validation")
+
+        tn, fp, fn, tp = confusion_matrix(
+            y_external,
+            (p_external >= frozen_threshold).astype(int),
+            labels=[0, 1],
+        ).ravel()
+        st.dataframe(
+            pd.DataFrame(
+                {
+                    "": ["Actual No GDM", "Actual GDM"],
+                    "Predicted No GDM": [tn, fn],
+                    "Predicted GDM": [fp, tp],
+                }
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+        render_confusion_matrix(
+            y_external,
+            (p_external >= frozen_threshold).astype(int),
+            "External Validation Confusion Matrix",
+        )
+    else:
+        st.info(
+            "The external dataset has no complete two-class outcome. Predictions can still be generated, "
+            "but ROC-AUC, PR-AUC, sensitivity, specificity, precision, F1, Brier, and log loss cannot be evaluated."
+        )
+
+    st.subheader("5. External conformal prediction")
+    st.metric("Frozen conformal quantile", f"{frozen_conformal_q:.4f}")
+    conformal_counts = (
+        pd.Series(external_conformal_sets)
+        .value_counts()
+        .rename_axis("Conformal set")
+        .reset_index(name="Count")
+    )
+    st.dataframe(conformal_counts, width="stretch", hide_index=True)
+    fig_external_conformal = px.bar(
+        conformal_counts, x="Conformal set", y="Count", text="Count",
+        title="External Conformal Prediction Sets",
+    )
+    fig_external_conformal.update_layout(margin=dict(l=20, r=20, t=55, b=20))
+    st.plotly_chart(fig_external_conformal, use_container_width=True)
+    st.caption(
+        "{GDM, No GDM} means both outcomes remain plausible under the reference calibration. "
+        "It is an uncertainty statement, not a diagnosis."
+    )
+
+    st.subheader("6. External uncertainty")
+    uncertainty_summary = pd.DataFrame(
+        {
+            "Measure": [
+                "Mean P(GDM)",
+                "Mean epistemic uncertainty",
+                "Mean aleatoric uncertainty",
+                "Mean predictive entropy",
+                "Mean mutual information",
+            ],
+            "Value": [
+                np.mean(external_ensemble),
+                np.mean(external_uncertainty["epistemic_uncertainty"]),
+                np.mean(external_uncertainty["aleatoric_uncertainty"]),
+                np.mean(external_uncertainty["predictive_entropy"]),
+                np.mean(external_uncertainty["mutual_information"]),
+            ],
+        }
+    )
+    st.dataframe(uncertainty_summary.round(4), width="stretch", hide_index=True)
+    render_uncertainty_chart(external_uncertainty, "External Ensemble Uncertainty")
+
+    st.subheader("7. External fairness audit")
+    fairness_input = external_df.copy()
+    fairness_input[TARGET_COLUMN] = external_target
+    fairness = fairness_audit(
+        fairness_input,
+        external_ensemble,
+        frozen_threshold,
+    )
     if fairness.empty:
-        return None
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4))
-    x = np.arange(len(fairness))
-    width = 0.65
-    selection = fairness["Selection rate"]
-    b1 = axes[0].bar(x, selection.fillna(0), width)
-    axes[0].bar_label(b1, labels=[f"{v:.2f}" if pd.notna(v) else "NA" for v in selection], padding=2, fontsize=8)
-    axes[0].set_xticks(x, fairness["Age group"])
-    axes[0].set_ylim(0, 1)
-    style_axis(axes[0], "Selection rate by age group", "Age group", "Selection rate")
-    fpr = fairness["False-positive rate"]
-    b2 = axes[1].bar(x, fpr.fillna(0), width)
-    axes[1].bar_label(b2, labels=[f"{v:.2f}" if pd.notna(v) else "NA" for v in fpr], padding=2, fontsize=8)
-    axes[1].set_xticks(x, fairness["Age group"])
-    axes[1].set_ylim(0, 1)
-    style_axis(axes[1], "False-positive rate by age group", "Age group", "False-positive rate")
-    fig.tight_layout()
-    return fig
+        st.info("Age-group fairness could not be calculated from the mapped external data.")
+    else:
+        st.dataframe(fairness.round(4), width="stretch", hide_index=True)
+        valid_fpr = fairness["False-positive rate"].dropna()
+        if len(valid_fpr) >= 2:
+            st.metric("External age-group FPR disparity", f"{(valid_fpr.max() - valid_fpr.min()):.4f}")
+        st.caption(
+            "This reports age-group selection rates and false-positive-rate disparity. "
+            "It is not a complete Equalized Odds assessment."
+        )
+        render_fairness_chart(fairness, "External Age-group Fairness Audit")
+
+    st.subheader("8. External BMI population-shift monitoring")
+    reference_bmi = safe_numeric(X_train[BMI_COLUMN])
+    external_bmi = safe_numeric(external_df[BMI_COLUMN])
+    external_psi = calculate_psi(reference_bmi, external_bmi, BMI_BINS)
+    if pd.isna(external_psi):
+        st.info("BMI PSI could not be calculated.")
+    else:
+        st.metric("External BMI PSI", f"{external_psi:.4f}")
+        if external_psi < 0.10:
+            st.success("Minimal BMI distribution shift detected.")
+        elif external_psi < PSI_THRESHOLD:
+            st.warning("Moderate BMI distribution shift detected.")
+        else:
+            st.error(f"Substantial BMI distribution shift detected (PSI ≥ {PSI_THRESHOLD:.2f}).")
+        st.caption(
+            "PSI is a monitoring statistic. It does not modify the frozen model, threshold, or conformal quantile."
+        )
+        render_bmi_psi_chart(
+            reference_bmi,
+            external_bmi,
+            BMI_BINS,
+            external_psi,
+            "External BMI Population Stability",
+        )
+
+    st.subheader("9. External predictions")
+    results = external_raw.copy()
+    results["SafeTriage_GDM_probability"] = external_ensemble
+    results["SafeTriage_risk_classification"] = np.where(
+        external_predictions == 1,
+        "GDM risk",
+        "Lower predicted GDM risk",
+    )
+    results["SafeTriage_decision_threshold"] = frozen_threshold
+    results["SafeTriage_conformal_prediction_set"] = external_conformal_sets
+    results["SafeTriage_conformal_q_reference"] = frozen_conformal_q
+    results["SafeTriage_epistemic_uncertainty"] = external_uncertainty["epistemic_uncertainty"]
+    results["SafeTriage_aleatoric_uncertainty"] = external_uncertainty["aleatoric_uncertainty"]
+    results["SafeTriage_predictive_entropy"] = external_uncertainty["predictive_entropy"]
+    results["SafeTriage_mutual_information"] = external_uncertainty["mutual_information"]
+    for model_name in EXPECTED_MODEL_ORDER:
+        safe_name = model_name.replace(" ", "_").replace("-", "_")
+        results[f"SafeTriage_{safe_name}_probability"] = external_probabilities[model_name]
+    results["SafeTriage_external_validation"] = True
+
+    st.dataframe(
+        results[[
+            "SafeTriage_GDM_probability",
+            "SafeTriage_risk_classification",
+            "SafeTriage_conformal_prediction_set",
+            "SafeTriage_epistemic_uncertainty",
+            "SafeTriage_aleatoric_uncertainty",
+        ]].head(100).round(4),
+        width="stretch",
+    )
+
+    st.download_button(
+        label="Download external-validation predictions (CSV)",
+        data=results.to_csv(index=False).encode("utf-8"),
+        file_name="safetriage_gdm_external_validation_predictions.csv",
+        mime="text/csv",
+    )
+
+    st.subheader("Research interpretation")
+    st.markdown(
+        "The external-validation mode asks whether a model developed in one dataset "
+        "transports to an independent population. Differences in discrimination, "
+        "threshold performance, uncertainty, fairness, or BMI distribution are "
+        "transportability findings; they are not automatically evidence that the "
+        "external dataset is incorrect."
+    )
+    st.warning(
+        "SafeTriage-GDM remains a research prototype. External validation, conformal "
+        "prediction, fairness auditing, uncertainty estimates, and PSI do not establish "
+        "clinical validity or clinical safety."
+    )
 
 
-def plot_bmi_distribution(reference, current):
-    reference = pd.to_numeric(reference, errors="coerce").dropna()
-    current = pd.to_numeric(current, errors="coerce").dropna()
-    if len(reference) == 0 or len(current) == 0:
-        return None
-    fig, ax = plt.subplots(figsize=(8, 4.5))
-    ax.hist(reference, bins=20, alpha=0.55, label="Training reference BMI", density=True)
-    ax.hist(current, bins=20, alpha=0.55, label="Current uploaded BMI", density=True)
-    style_axis(ax, "BMI distribution: training reference vs current data", "Pre-pregnancy BMI (kg/m²)", "Density")
-    ax.legend(frameon=False)
-    fig.tight_layout()
-    return fig
+# ==============================================================================
+# ANALYSIS MODE ROUTING
+# ==============================================================================
 
-
-def plot_feature_importance(feature_importance, top_n=15):
-    if feature_importance.empty:
-        return None
-    data = feature_importance.head(top_n).sort_values("importance", ascending=True)
-    fig, ax = plt.subplots(figsize=(9, 6))
-    bars = ax.barh(data["original_variable"], data["importance"])
-    ax.bar_label(bars, fmt="%.3f", padding=3, fontsize=8)
-    style_axis(ax, f"Top {min(top_n, len(data))} aggregated model features", "Mean model importance", "")
-    fig.tight_layout()
-    return fig
+if analysis_mode == "External Validation":
+    run_external_validation_mode()
+    st.stop()
 
 
 # ==============================================================================
@@ -1619,7 +2240,7 @@ def plot_feature_importance(feature_importance, top_n=15):
 # ==============================================================================
 
 uploaded_file = st.file_uploader(
-    "Upload CBGS-compatible Excel dataset",
+    "Upload compatible Excel dataset",
     type=["xlsx", "xls"],
 )
 
@@ -1630,7 +2251,8 @@ if uploaded_file is None:
         ### Getting started
 
         Upload an Excel dataset containing the required GDM target and
-        antepartum predictor variables.
+        antepartum predictor variables. For datasets with different column
+        names, use **External Validation** mode.
 
         The application will then:
 
@@ -1811,8 +2433,15 @@ st.dataframe(
     hide_index=True,
 )
 
-with st.expander("Visualize outcome distribution", expanded=True):
-    st.pyplot(plot_outcome_distribution(y_labeled), use_container_width=True)
+fig_target = px.bar(
+    target_summary,
+    x="Outcome",
+    y="Count",
+    text="Count",
+    title="Known GDM Outcome Distribution",
+)
+fig_target.update_layout(margin=dict(l=20, r=20, t=55, b=20))
+st.plotly_chart(fig_target, use_container_width=True)
 
 
 if y_labeled.nunique() < 2:
@@ -1899,13 +2528,23 @@ st.dataframe(
     hide_index=True,
 )
 
+split_plot = split_summary.melt(
+    id_vars="Partition",
+    value_vars=["GDM", "No GDM"],
+    var_name="Outcome",
+    value_name="Count",
+)
+fig_split = px.bar(
+    split_plot, x="Partition", y="Count", color="Outcome",
+    barmode="stack", title="Labeled Data Distribution Across Partitions",
+)
+fig_split.update_layout(margin=dict(l=20, r=20, t=55, b=20))
+st.plotly_chart(fig_split, use_container_width=True)
+
 st.caption(
     "The test partition remains untouched and naturally imbalanced. "
     "ROSE-style balancing is applied only to training data."
 )
-
-with st.expander("Visualize partition class distributions", expanded=False):
-    st.pyplot(plot_split_distribution(y_train, y_calibration, y_test), use_container_width=True)
 
 
 # ==============================================================================
@@ -2058,8 +2697,7 @@ st.caption(
     "The test partition is not used to choose the threshold."
 )
 
-with st.expander("Visualize threshold selection", expanded=True):
-    st.pyplot(plot_threshold_selection(threshold_table, threshold), use_container_width=True)
+render_threshold_curve(threshold_table, threshold)
 
 
 # ==============================================================================
@@ -2187,16 +2825,14 @@ st.dataframe(
     hide_index=True,
 )
 
-with st.expander("ROC and precision–recall curves", expanded=True):
-    curve_probabilities = {
-        name: model_probabilities[name]["test"]
-        for name in EXPECTED_MODEL_ORDER
-    }
-    curve_col1, curve_col2 = st.columns(2)
-    with curve_col1:
-        st.pyplot(plot_roc_curves(y_test, curve_probabilities, test_ensemble_probability), use_container_width=True)
-    with curve_col2:
-        st.pyplot(plot_pr_curves(y_test, curve_probabilities, test_ensemble_probability), use_container_width=True)
+render_model_performance_chart(individual_table)
+
+model_curve_probabilities = {
+    model_name: model_probabilities[model_name]["test"]
+    for model_name in EXPECTED_MODEL_ORDER
+}
+model_curve_probabilities["Ensemble"] = test_ensemble_probability
+render_roc_pr_curves(y_test, model_curve_probabilities, "Test-set")
 
 
 # ==============================================================================
@@ -2240,10 +2876,11 @@ st.dataframe(
     hide_index=True,
 )
 
-st.pyplot(plot_confusion_matrix(y_test, test_predictions), use_container_width=True)
-
-with st.expander("Predicted probability distribution", expanded=False):
-    st.pyplot(plot_probability_distribution(y_test, test_ensemble_probability, threshold), use_container_width=True)
+render_confusion_matrix(
+    y_test,
+    test_predictions,
+    "Ensemble Confusion Matrix — Untouched Test Set",
+)
 
 
 # ==============================================================================
@@ -2293,10 +2930,9 @@ st.caption(
     "not establish clinical safety or diagnostic validity."
 )
 
-with st.expander("Visualize conformal prediction sets", expanded=True):
-    st.pyplot(plot_conformal_distribution(conformal_sets), use_container_width=True)
+render_conformal_chart(conformal_sets)
 
-with st.expander("How to interpret conformal prediction sets", expanded=True):
+with st.expander("How to interpret conformal prediction sets"):
     st.markdown(
         """
         **Conformal prediction set:** `{GDM, No GDM}` indicates that both
@@ -2373,6 +3009,8 @@ st.dataframe(
     hide_index=True,
 )
 
+render_uncertainty_chart(uncertainty)
+
 st.caption(
     "Epistemic uncertainty is estimated from disagreement among the "
     "three model probabilities. Aleatoric uncertainty is represented "
@@ -2380,8 +3018,10 @@ st.caption(
     "measures and are not clinical confidence scores."
 )
 
-with st.expander("Visualize uncertainty distributions", expanded=True):
-    st.pyplot(plot_uncertainty_distributions(uncertainty, conformal_sets), use_container_width=True)
+render_probability_distribution(
+    y_test,
+    test_ensemble_probability,
+)
 
 
 # ==============================================================================
@@ -2435,10 +3075,7 @@ else:
         "rates. It is not a complete Equalized Odds assessment."
     )
 
-    with st.expander("Visualize fairness audit", expanded=True):
-        fairness_fig = plot_fairness_rates(fairness)
-        if fairness_fig is not None:
-            st.pyplot(fairness_fig, use_container_width=True)
+    render_fairness_chart(fairness)
 
 
 # ==============================================================================
@@ -2502,10 +3139,13 @@ if BMI_COLUMN in X_train.columns:
         "prediction threshold."
     )
 
-    with st.expander("Visualize BMI population shift", expanded=True):
-        bmi_fig = plot_bmi_distribution(X_train[BMI_COLUMN], df[BMI_COLUMN])
-        if bmi_fig is not None:
-            st.pyplot(bmi_fig, use_container_width=True)
+    if not pd.isna(bmi_psi):
+        render_bmi_psi_chart(
+            X_train[BMI_COLUMN],
+            df[BMI_COLUMN],
+            BMI_BINS,
+            bmi_psi,
+        )
 
 else:
 
@@ -2547,10 +3187,7 @@ else:
         "within the fitted predictive system. It is not causal evidence."
     )
 
-    with st.expander("Visualize model-based feature importance", expanded=True):
-        importance_fig = plot_feature_importance(feature_importance, top_n=15)
-        if importance_fig is not None:
-            st.pyplot(importance_fig, use_container_width=True)
+    render_feature_importance(feature_importance, top_n=15)
 
 
 # ==============================================================================
