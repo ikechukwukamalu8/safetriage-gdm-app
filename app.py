@@ -10,7 +10,7 @@
 #   2. MICE-style iterative imputation
 #   3. Training-only ROSE-style smoothed minority oversampling
 #   4. Random Forest + XGBoost + Logistic Regression
-#   5. Equal-weight probability ensemble
+#   5. Development-data-weighted probability ensemble
 #   6. Calibration-set threshold selection
 #   7. 90% conformal prediction
 #   8. Uncertainty quantification
@@ -41,6 +41,7 @@ from sklearn.metrics import (
     brier_score_loss,
     confusion_matrix,
     f1_score,
+    fbeta_score,
     log_loss,
     precision_score,
     recall_score,
@@ -172,7 +173,7 @@ def render_threshold_curve(threshold_table, selected_threshold):
     """Show calibration-derived sensitivity, specificity and balanced accuracy."""
     plot_df = threshold_table.copy()
     fig = go.Figure()
-    for column in ["sensitivity", "specificity", "balanced_accuracy"]:
+    for column in ["sensitivity", "specificity", "balanced_accuracy", "F2"]:
         fig.add_trace(
             go.Scatter(
                 x=plot_df["threshold"],
@@ -352,6 +353,8 @@ EXPECTED_MODEL_KEYS = set(EXPECTED_MODEL_ORDER)
 # original training partition; calibration and test partitions remain untouched.
 TUNING_FOLDS = 5
 TUNING_ENABLED = True
+ENSEMBLE_WEIGHT_STEP = 0.05
+CALIBRATION_OBJECTIVE = "F2"
 
 AGE_GROUPS = [
     "<25",
@@ -487,7 +490,7 @@ with st.sidebar:
         5. Random Forest
         6. XGBoost
         7. Logistic Regression
-        8. Equal-weight ensemble
+        8. Development-data-weighted ensemble
         9. Calibration threshold
         10. 90% conformal prediction
         11. Fairness audit
@@ -1131,25 +1134,110 @@ def train_models(
 
 
 # ==============================================================================
-# ENSEMBLE
+# DEVELOPMENT-DATA-WEIGHTED ENSEMBLE
 # ==============================================================================
+
+
+def weighted_ensemble_probability(
+    probabilities: Dict[str, np.ndarray],
+    weights: Dict[str, float],
+) -> np.ndarray:
+    """Combine model probabilities using weights frozen from development data."""
+    matrix = np.column_stack(
+        [probabilities[model_name] for model_name in EXPECTED_MODEL_ORDER]
+    )
+    weight_vector = np.array(
+        [weights[model_name] for model_name in EXPECTED_MODEL_ORDER],
+        dtype=float,
+    )
+    return np.average(matrix, axis=1, weights=weight_vector)
 
 
 def ensemble_probability(
     probabilities: Dict[str, np.ndarray],
+    weights: Optional[Dict[str, float]] = None,
 ) -> np.ndarray:
+    """Return weighted ensemble probabilities; equal weights are a fallback."""
+    if weights is None:
+        weights = {model_name: 1.0 for model_name in EXPECTED_MODEL_ORDER}
+    return weighted_ensemble_probability(probabilities, weights)
 
-    return np.mean(
-        np.column_stack(
-            [
-                probabilities[
-                    model_name
-                ]
-                for model_name in EXPECTED_MODEL_ORDER
-            ]
-        ),
-        axis=1,
+
+@st.cache_data(show_spinner=False)
+def learn_ensemble_weights_on_training_data(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    model_params: Dict[str, Dict],
+):
+    """Learn simplex ensemble weights using OOF predictions from training data only."""
+    from sklearn.model_selection import StratifiedKFold
+
+    cv = StratifiedKFold(
+        n_splits=TUNING_FOLDS,
+        shuffle=True,
+        random_state=RANDOM_STATE + 100,
     )
+    oof = {
+        model_name: np.full(len(X_train), np.nan, dtype=float)
+        for model_name in EXPECTED_MODEL_ORDER
+    }
+
+    for fold_number, (train_idx, valid_idx) in enumerate(cv.split(X_train, y_train), start=1):
+        X_fold = X_train.iloc[train_idx].copy()
+        y_fold = y_train.iloc[train_idx].copy()
+        X_valid = X_train.iloc[valid_idx].copy()
+
+        X_bal, y_bal, _ = rose_style_balance(
+            X_fold, y_fold,
+            random_state=RANDOM_STATE + 100 + fold_number,
+            noise_fraction=0.10,
+        )
+        fold_preprocessor = make_preprocessor(X_bal)
+        X_bal_processed = fold_preprocessor.fit_transform(X_bal)
+        X_valid_processed = fold_preprocessor.transform(X_valid)
+
+        models = create_models(model_params)
+        for model_name in EXPECTED_MODEL_ORDER:
+            model = clone(models[model_name])
+            model.fit(X_bal_processed, y_bal)
+            oof[model_name][valid_idx] = model.predict_proba(X_valid_processed)[:, 1]
+
+    matrix = np.column_stack([oof[name] for name in EXPECTED_MODEL_ORDER])
+    y_array = np.asarray(y_train).astype(int)
+
+    best_weights = None
+    best_pr = -np.inf
+    best_auc = -np.inf
+    records = []
+
+    steps = int(round(1.0 / ENSEMBLE_WEIGHT_STEP))
+    for i in range(steps + 1):
+        for j in range(steps - i + 1):
+            k = steps - i - j
+            weights_vector = np.array([i, j, k], dtype=float) / steps
+            if np.sum(weights_vector) == 0:
+                continue
+            probability = matrix @ weights_vector
+            pr_auc = average_precision_score(y_array, probability)
+            roc_auc = roc_auc_score(y_array, probability)
+            records.append({
+                "Random Forest": weights_vector[0],
+                "XGBoost": weights_vector[1],
+                "Logistic Regression": weights_vector[2],
+                "OOF PR-AUC": pr_auc,
+                "OOF ROC-AUC": roc_auc,
+            })
+            if (pr_auc > best_pr) or (np.isclose(pr_auc, best_pr) and roc_auc > best_auc):
+                best_pr = pr_auc
+                best_auc = roc_auc
+                best_weights = {
+                    name: float(weight)
+                    for name, weight in zip(EXPECTED_MODEL_ORDER, weights_vector)
+                }
+
+    return best_weights, pd.DataFrame(records).sort_values(
+        ["OOF PR-AUC", "OOF ROC-AUC"], ascending=False
+    ).reset_index(drop=True)
 
 
 # ==============================================================================
@@ -1161,67 +1249,38 @@ def select_threshold(
     y_true: pd.Series,
     probability: np.ndarray,
 ) -> Tuple[float, pd.DataFrame]:
-
-    thresholds = np.linspace(
-        0.05,
-        0.95,
-        181,
-    )
-
+    """Select a recall-oriented threshold from calibration data only."""
+    thresholds = np.linspace(0.05, 0.95, 181)
     records = []
-
-    y_true = np.asarray(
-        y_true
-    ).astype(int)
+    y_true = np.asarray(y_true).astype(int)
 
     for threshold in thresholds:
+        prediction = (probability >= threshold).astype(int)
+        sensitivity = recall_score(y_true, prediction, zero_division=0)
+        specificity = recall_score(y_true, prediction, pos_label=0, zero_division=0)
+        balanced_accuracy = (sensitivity + specificity) / 2
+        f2 = fbeta_score(y_true, prediction, beta=2, zero_division=0)
+        records.append({
+            "threshold": threshold,
+            "sensitivity": sensitivity,
+            "specificity": specificity,
+            "balanced_accuracy": balanced_accuracy,
+            "F2": f2,
+        })
 
-        prediction = (
-            probability >= threshold
-        ).astype(int)
+    threshold_table = pd.DataFrame(records)
+    if CALIBRATION_OBJECTIVE == "F2":
+        best_row = threshold_table.sort_values(
+            ["F2", "sensitivity", "specificity"],
+            ascending=[False, False, False],
+        ).iloc[0]
+    else:
+        best_row = threshold_table.sort_values(
+            ["balanced_accuracy", "sensitivity"],
+            ascending=[False, False],
+        ).iloc[0]
 
-        sensitivity = recall_score(
-            y_true,
-            prediction,
-            zero_division=0,
-        )
-
-        specificity = recall_score(
-            y_true,
-            prediction,
-            pos_label=0,
-            zero_division=0,
-        )
-
-        balanced_accuracy = (
-            sensitivity + specificity
-        ) / 2
-
-        records.append(
-            {
-                "threshold": threshold,
-                "sensitivity": sensitivity,
-                "specificity": specificity,
-                "balanced_accuracy": balanced_accuracy,
-            }
-        )
-
-    threshold_table = pd.DataFrame(
-        records
-    )
-
-    best_row = threshold_table.loc[
-        threshold_table[
-            "balanced_accuracy"
-        ].idxmax()
-    ]
-
-    return (
-        float(
-            best_row["threshold"]
-        ),
-        threshold_table,
-    )
+    return float(best_row["threshold"]), threshold_table
 
 
 # ==============================================================================
@@ -1331,40 +1390,23 @@ def binary_entropy(
 
 def calculate_uncertainty(
     model_probabilities: Dict[str, np.ndarray],
+    weights: Optional[Dict[str, float]] = None,
 ) -> Dict[str, np.ndarray]:
 
-    matrix = np.column_stack(
-        [
-            model_probabilities[
-                model_name
-            ]
-            for model_name in EXPECTED_MODEL_ORDER
-        ]
-    )
+    if weights is None:
+        weights = {model_name: 1.0 for model_name in EXPECTED_MODEL_ORDER}
 
-    predictive_probability = matrix.mean(
-        axis=1
-    )
+    matrix = np.column_stack([model_probabilities[name] for name in EXPECTED_MODEL_ORDER])
+    weight_vector = np.array([weights[name] for name in EXPECTED_MODEL_ORDER], dtype=float)
+    weight_vector = weight_vector / weight_vector.sum()
 
-    epistemic = matrix.std(
-        axis=1,
-        ddof=0,
+    predictive_probability = np.average(matrix, axis=1, weights=weight_vector)
+    epistemic = np.sqrt(
+        np.average((matrix - predictive_probability[:, None]) ** 2, axis=1, weights=weight_vector)
     )
-
-    aleatoric = binary_entropy(
-        matrix
-    ).mean(
-        axis=1
-    )
-
-    predictive_entropy = binary_entropy(
-        predictive_probability
-    )
-
-    mutual_information = np.maximum(
-        predictive_entropy - aleatoric,
-        0.0,
-    )
+    aleatoric = np.average(binary_entropy(matrix), axis=1, weights=weight_vector)
+    predictive_entropy = binary_entropy(predictive_probability)
+    mutual_information = np.maximum(predictive_entropy - aleatoric, 0.0)
 
     return {
         "epistemic_uncertainty": epistemic,
@@ -2178,8 +2220,12 @@ def run_external_validation_mode():
         st.exception(exc)
         st.stop()
 
-    with st.spinner("Developing and freezing the reference model..."):
+    with st.spinner("Tuning and developing the reference model..."):
         try:
+            reference_tuned_params, _ = tune_models_on_training_data(X_train, y_train)
+            reference_weights, _ = learn_ensemble_weights_on_training_data(
+                X_train, y_train, reference_tuned_params
+            )
             (
                 preprocessor,
                 fitted_models,
@@ -2193,6 +2239,7 @@ def run_external_validation_mode():
                 y_train,
                 X_calibration,
                 X_reference_test,
+                model_params=reference_tuned_params,
             )
         except Exception as exc:
             st.error("Reference model training failed.")
@@ -2207,7 +2254,8 @@ def run_external_validation_mode():
         {
             model_name: reference_probabilities[model_name]["calibration"]
             for model_name in EXPECTED_MODEL_ORDER
-        }
+        },
+        reference_weights,
     )
 
     frozen_threshold, _ = select_threshold(
@@ -2249,7 +2297,7 @@ def run_external_validation_mode():
         model_name: fitted_models[model_name].predict_proba(external_processed)[:, 1]
         for model_name in EXPECTED_MODEL_ORDER
     }
-    external_ensemble = ensemble_probability(external_probabilities)
+    external_ensemble = ensemble_probability(external_probabilities, reference_weights)
 
     external_conformal_sets, frozen_conformal_q, _ = conformal_prediction(
         reference_calibration_ensemble,
@@ -2259,7 +2307,7 @@ def run_external_validation_mode():
     )
 
     external_predictions = (external_ensemble >= frozen_threshold).astype(int)
-    external_uncertainty = calculate_uncertainty(external_probabilities)
+    external_uncertainty = calculate_uncertainty(external_probabilities, reference_weights)
 
     st.success(
         "Reference model frozen. The external dataset was evaluated without retraining, "
@@ -2830,6 +2878,22 @@ else:
     tuned_model_params = {}
     tuning_table = pd.DataFrame()
 
+if not tuned_model_params:
+    tuned_model_params = {
+        name: {} for name in EXPECTED_MODEL_ORDER
+    }
+
+with st.spinner("Learning ensemble weights from out-of-fold training predictions..."):
+    try:
+        ensemble_weights, ensemble_weight_table = learn_ensemble_weights_on_training_data(
+            X_train, y_train, tuned_model_params
+        )
+    except Exception as exc:
+        st.warning("Development-only ensemble weighting failed; equal weights will be used.")
+        st.exception(exc)
+        ensemble_weights = {name: 1.0 / len(EXPECTED_MODEL_ORDER) for name in EXPECTED_MODEL_ORDER}
+        ensemble_weight_table = pd.DataFrame()
+
 if tuned_model_params:
     st.markdown("### Training-partition hyperparameter selection")
     tuning_summary = pd.DataFrame([
@@ -2844,6 +2908,17 @@ if tuned_model_params:
                 width="stretch",
                 hide_index=True,
             )
+
+st.markdown("### Development-data ensemble weights")
+weight_table = pd.DataFrame({
+    "Model": EXPECTED_MODEL_ORDER,
+    "Weight": [ensemble_weights[name] for name in EXPECTED_MODEL_ORDER],
+})
+st.dataframe(weight_table.round(4), width="stretch", hide_index=True)
+st.caption(
+    "Weights are learned from out-of-fold predictions within the development/training partition only. "
+    "The calibration and test partitions are not used to learn ensemble weights."
+)
 
 with st.spinner(
     "Training Random Forest, XGBoost, and Logistic Regression..."
@@ -2948,20 +3023,18 @@ st.caption(
 
 calibration_ensemble_probability = ensemble_probability(
     {
-        model_name: model_probabilities[
-            model_name
-        ]["calibration"]
+        model_name: model_probabilities[model_name]["calibration"]
         for model_name in EXPECTED_MODEL_ORDER
-    }
+    },
+    ensemble_weights,
 )
 
 test_ensemble_probability = ensemble_probability(
     {
-        model_name: model_probabilities[
-            model_name
-        ]["test"]
+        model_name: model_probabilities[model_name]["test"]
         for model_name in EXPECTED_MODEL_ORDER
-    }
+    },
+    ensemble_weights,
 )
 
 
@@ -2984,15 +3057,15 @@ st.metric(
 )
 
 st.caption(
-    "The threshold is selected using the calibration partition only. "
-    "The test partition is not used to choose the threshold."
+    "The threshold is selected using the calibration partition only by maximizing F2, "
+    "which gives greater weight to sensitivity. The test partition is not used to choose the threshold."
 )
 
 # Diagnostic: show how the frozen ensemble threshold translates into positive
 # predictions for each model. This is descriptive only and does not alter the
 # threshold or use the test set for model selection.
 threshold_diagnostic = pd.DataFrame({
-    "Model": list(EXPECTED_MODEL_ORDER) + ["Equal-weight ensemble"],
+    "Model": list(EXPECTED_MODEL_ORDER) + ["Weighted ensemble"],
     "Predicted GDM": [
         int((model_probabilities[name]["test"] >= threshold).sum())
         for name in EXPECTED_MODEL_ORDER
@@ -3002,7 +3075,7 @@ threshold_diagnostic["Predicted No GDM"] = len(y_test) - threshold_diagnostic["P
 st.markdown("**Test-set prediction-count diagnostic at the frozen threshold**")
 st.dataframe(threshold_diagnostic, use_container_width=True, hide_index=True)
 st.caption(
-    "A zero sensitivity value means no true GDM cases were classified as GDM "
+    "Individual-model classification metrics are shown at the same frozen threshold selected for the weighted ensemble; they are descriptive and do not use model-specific test-set threshold optimization. A zero sensitivity value means no true GDM cases were classified as GDM "
     "at the frozen threshold; the diagnostic above shows the corresponding "
     "number of positive predictions without changing the threshold."
 )
@@ -3103,7 +3176,7 @@ st.dataframe(
 # ==============================================================================
 
 st.markdown(
-    "### Individual model performance"
+    "### Individual model performance at the frozen weighted-ensemble threshold"
 )
 
 individual_records = []
@@ -3294,11 +3367,10 @@ st.subheader(
 
 uncertainty = calculate_uncertainty(
     {
-        model_name: model_probabilities[
-            model_name
-        ]["test"]
+        model_name: model_probabilities[model_name]["test"]
         for model_name in EXPECTED_MODEL_ORDER
-    }
+    },
+    ensemble_weights,
 )
 
 uncertainty_table = pd.DataFrame(
@@ -3551,11 +3623,13 @@ for model_name in EXPECTED_MODEL_ORDER:
     )[:, 1]
 
 all_ensemble_probability = ensemble_probability(
-    all_model_probabilities
+    all_model_probabilities,
+    ensemble_weights,
 )
 
 all_uncertainty = calculate_uncertainty(
-    all_model_probabilities
+    all_model_probabilities,
+    ensemble_weights,
 )
 
 all_prediction = (
@@ -3709,9 +3783,10 @@ No SMOTETomek is used.
 2. XGBoost
 3. Logistic Regression
 
-The ensemble is:
-
-`P(GDM) = [P_RF(GDM) + P_XGB(GDM) + P_LR(GDM)] / 3`
+The ensemble is a development-data-weighted combination of the three model probabilities.
+The non-negative model weights sum to 1 and are learned from out-of-fold predictions
+within the training/development partition only. The calibration and test partitions
+are not used to learn ensemble weights.
 
 **Threshold**
 
