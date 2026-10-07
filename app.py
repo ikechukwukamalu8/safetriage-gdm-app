@@ -355,6 +355,9 @@ TUNING_FOLDS = 5
 TUNING_ENABLED = True
 ENSEMBLE_WEIGHT_STEP = 0.05
 CALIBRATION_OBJECTIVE = "F2"
+# Prevent recall-only threshold selection from collapsing into an almost-all-positive rule.
+# This is a research design constraint, not a clinical performance claim.
+CALIBRATION_MIN_SPECIFICITY = 0.60
 
 AGE_GROUPS = [
     "<25",
@@ -1269,15 +1272,36 @@ def select_threshold(
         })
 
     threshold_table = pd.DataFrame(records)
-    if CALIBRATION_OBJECTIVE == "F2":
+
+    # The threshold objective is recall-oriented, but it is constrained by a
+    # prespecified minimum specificity. This prevents a very low threshold
+    # from classifying nearly everyone as GDM simply to maximize F2.
+    feasible = threshold_table[
+        threshold_table["specificity"] >= CALIBRATION_MIN_SPECIFICITY
+    ].copy()
+
+    if not feasible.empty and CALIBRATION_OBJECTIVE == "F2":
+        best_row = feasible.sort_values(
+            ["F2", "sensitivity", "specificity", "threshold"],
+            ascending=[False, False, False, True],
+        ).iloc[0]
+    elif not feasible.empty:
+        best_row = feasible.sort_values(
+            ["balanced_accuracy", "sensitivity", "specificity", "threshold"],
+            ascending=[False, False, False, True],
+        ).iloc[0]
+    elif CALIBRATION_OBJECTIVE == "F2":
+        # Defensive fallback: choose the most specific available threshold,
+        # then maximize F2. This should rarely be needed because high thresholds
+        # generally produce high specificity.
         best_row = threshold_table.sort_values(
-            ["F2", "sensitivity", "specificity"],
-            ascending=[False, False, False],
+            ["specificity", "F2", "sensitivity", "threshold"],
+            ascending=[False, False, False, True],
         ).iloc[0]
     else:
         best_row = threshold_table.sort_values(
-            ["balanced_accuracy", "sensitivity"],
-            ascending=[False, False],
+            ["specificity", "balanced_accuracy", "sensitivity", "threshold"],
+            ascending=[False, False, False, True],
         ).iloc[0]
 
     return float(best_row["threshold"]), threshold_table
@@ -3057,8 +3081,10 @@ st.metric(
 )
 
 st.caption(
-    "The threshold is selected using the calibration partition only by maximizing F2, "
-    "which gives greater weight to sensitivity. The test partition is not used to choose the threshold."
+    f"The threshold is selected using the calibration partition only by maximizing F2 "
+    f"subject to a prespecified minimum specificity of {CALIBRATION_MIN_SPECIFICITY:.0%}. "
+    "This prioritizes sensitivity while preventing an almost-all-positive rule. "
+    "The test partition is not used to choose the threshold."
 )
 
 # Diagnostic: show how the frozen ensemble threshold translates into positive
@@ -3790,8 +3816,10 @@ are not used to learn ensemble weights.
 
 **Threshold**
 
-The decision threshold is selected from the calibration partition using
-balanced accuracy. The test partition is not used to choose the threshold.
+The decision threshold is selected from the calibration partition by maximizing
+F2, subject to a prespecified minimum specificity of 60%. This gives greater
+weight to sensitivity while preventing threshold selection from collapsing into
+an almost-all-positive rule. The test partition is not used to choose the threshold.
 
 **Conformal prediction**
 
