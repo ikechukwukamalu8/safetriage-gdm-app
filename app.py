@@ -1700,6 +1700,10 @@ def normalized_column_name(value: str) -> str:
     return " ".join(text.split())
 
 
+# Prediction landmark: GDM assessment is based on the 75-g OGTT around week 28.
+LANDMARK_WEEK = 28.0
+
+
 def derive_landmark_mms(value: pd.Series) -> pd.Series:
     """Derive the 28-week MMS predictor from the raw CBGS start-week field.
 
