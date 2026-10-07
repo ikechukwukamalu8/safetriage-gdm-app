@@ -310,15 +310,6 @@ APP_SUBTITLE = (
 
 APP_VERSION = "Research Prototype"
 
-RESEARCH_DISCLAIMER = (
-    "SafeTriage-GDM is a research prototype for uncertainty-aware GDM risk "
-    "triage, conformal safety assessment, population-shift monitoring, and "
-    "algorithmic fairness auditing. It is not a medical device and must not "
-    "be used as a substitute for professional medical diagnosis, treatment, "
-    "or clinical decision-making."
-)
-
-
 TARGET_COLUMN = "Gestational diabetes?"
 
 RANDOM_STATE = 42
@@ -339,14 +330,15 @@ BMI_COLUMN = "Mother's pre-pregnancy BMI (kg/m2)"
 # reasonably be available before delivery.
 # --------------------------------------------------------------------------
 
+# Strict 28-week landmark predictor schema.
+# Only predictors that are defensible as known by the GDM assessment
+# landmark are accepted by the application.
 APPROVED_PREDICTORS = [
-    "MMS started by 28 weeks",
-    "Mother's pre-pregnancy BMI (kg/m2)",
     "Mother's age (years)",
+    "Mother's pre-pregnancy BMI (kg/m2)",
     "Parity",
+    "MMS started by 28 weeks",
 ]
-
-LANDMARK_WEEK = 28.0
 
 EXPECTED_MODEL_ORDER = [
     "Random Forest",
@@ -472,12 +464,18 @@ st.info(
 with st.sidebar:
 
     st.header("Pipeline")
+    st.info(
+        "Locked predictors: maternal age, pre-pregnancy BMI, parity, and "
+        "MMS started by 28 weeks. Whole-pregnancy MMS exposure, MMS stop, "
+        "whole-pregnancy duration, final pregnancy outcomes, and newborn "
+        "measurements are not used as predictors."
+    )
 
     st.markdown(
         """
         **Locked architecture**
 
-        1. Leakage-aware predictors
+        1. Strict 28-week landmark-safe predictors
         2. 60/15/25 stratified split
         3. MICE-style imputation
         4. Training-only ROSE-style balancing
@@ -1665,82 +1663,33 @@ def aggregate_feature_importance(
 # ==============================================================================
 
 PREDICTOR_LABELS = {
-    "MMS started by 28 weeks": "MMS started by 28 weeks",
-    "Mother's pre-pregnancy BMI (kg/m2)": "Pre-pregnancy BMI",
     "Mother's age (years)": "Maternal age",
+    "Mother's pre-pregnancy BMI (kg/m2)": "Pre-pregnancy BMI",
     "Parity": "Parity",
+    "MMS started by 28 weeks": "MMS started by 28 weeks",
 }
 
 COLUMN_ALIASES = {
+    "Mother's age (years)": ["maternal age", "mother age", "age years", "age"],
+    "Mother's pre-pregnancy BMI (kg/m2)": ["pre pregnancy bmi", "prepregnancy bmi", "prepreg bmi", "pre pregnancy body mass index", "bmi"],
+    "Parity": ["parity", "number of previous births", "birth order"],
     "MMS started by 28 weeks": [
         "mms started by 28 weeks",
-        "mms prior to wk28",
-        "mms prior to week 28",
-        "mms_prior_to_wk28",
         "mms_started_by_28_weeks",
+        "mmn started by 28 weeks",
+        "mmn_started_by_28_weeks",
         "supplementation started by 28 weeks",
+        "supplementation start by 28 weeks",
+        "mms start by 28 weeks",
+        "mmn start by 28 weeks",
+        # Raw CBGS start-week field is accepted only so the app can derive
+        # the landmark-safe binary feature.
+        "relative to the start of pregnancy when did multiple micronutrient supplementation start",
         "supplementation start timing",
         "mmn start",
         "supplementation start",
-        "Relative to the start of pregnancy, when did multiple micronutrient supplementation start?",
     ],
-    "Mother's pre-pregnancy BMI (kg/m2)": [
-        "pre pregnancy bmi", "prepregnancy bmi", "prepreg bmi",
-        "pre pregnancy body mass index", "bmi"
-    ],
-    "Mother's age (years)": ["maternal age", "mother age", "age years", "age"],
-    "Parity": ["parity", "number of previous births", "birth order"],
 }
-
-
-def derive_landmark_mms(value: pd.Series) -> pd.Series:
-    """Convert MMS start timing into a binary feature known by week 28.
-
-    Values <= 28 weeks are coded 1, values > 28 weeks as 0, and missing
-    start timing remains missing. This prevents whole-pregnancy MMS exposure,
-    stop timing, and total duration from entering the model.
-    """
-    numeric = pd.to_numeric(value, errors="coerce")
-    result = pd.Series(np.nan, index=value.index, dtype=float)
-    valid = numeric.notna()
-    result.loc[valid] = (numeric.loc[valid] <= LANDMARK_WEEK).astype(float)
-    return result
-
-
-def is_mms_start_source(source_name: str) -> bool:
-    normalized = normalized_column_name(source_name)
-    return (
-        "supplementation start" in normalized
-        or "mmn start" in normalized
-        or "mms start" in normalized
-        or "started by 28" in normalized
-        or "prior to wk28" in normalized
-        or "prior to week 28" in normalized
-    )
-
-
-def build_landmark_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Construct the leakage-aware 28-week feature matrix from raw CBGS or canonical data."""
-    out = df.copy()
-    canonical = "MMS started by 28 weeks"
-    if canonical not in out.columns:
-        start_candidates = [
-            "Relative to the start of pregnancy, when did multiple micronutrient supplementation start?",
-            "supplementation start timing",
-            "mmn start",
-            "mms start",
-        ]
-        normalized = {normalized_column_name(c): c for c in out.columns}
-        source = None
-        for candidate in start_candidates:
-            source = normalized.get(normalized_column_name(candidate))
-            if source is not None:
-                break
-        if source is not None:
-            out[canonical] = derive_landmark_mms(out[source])
-    else:
-        out[canonical] = pd.to_numeric(out[canonical], errors="coerce")
-    return out
 
 
 def normalized_column_name(value: str) -> str:
@@ -1781,9 +1730,8 @@ def schema_mapping_ui(
     st.markdown("#### Map uploaded columns to the SafeTriage-GDM schema")
     st.caption(
         "Column names and order may differ from the reference dataset. "
-        "Extra columns are ignored. The MMS feature is interpreted at the "
-        "28-week landmark; raw whole-pregnancy MMS, stop, and duration fields "
-        "are not accepted as model predictors."
+        "Extra columns are ignored. Each required predictor must map to one "
+        "distinct uploaded column."
     )
 
     with st.expander("Predictor mapping", expanded=True):
@@ -1842,20 +1790,54 @@ def schema_mapping_ui(
     return mapping, target_source
 
 
+def derive_mms_started_by_28(value: pd.Series) -> pd.Series:
+    """Derive a strict landmark-safe MMS indicator from a raw start-week field.
+
+    Numeric gestational weeks are interpreted directly. Common trimester labels
+    are supported for synthetic/external testing only; ambiguous values become
+    missing rather than being guessed.
+    """
+    numeric = pd.to_numeric(value, errors="coerce")
+    result = pd.Series(np.nan, index=value.index, dtype=float)
+    numeric_mask = numeric.notna()
+    result.loc[numeric_mask] = (numeric.loc[numeric_mask] <= 28).astype(float)
+
+    text = value.astype(str).str.strip().str.lower()
+    result.loc[text.str.contains("first trimester", na=False)] = 1.0
+    result.loc[text.str.contains("second trimester", na=False)] = 1.0
+    result.loc[text.str.contains("third trimester", na=False)] = 0.0
+    result.loc[text.isin(["yes", "1", "true"])] = 1.0
+    result.loc[text.isin(["no", "0", "false"])] = 0.0
+    return result
+
+
 def apply_schema_mapping(
     df: pd.DataFrame,
     predictor_mapping: Dict[str, str],
     target_source: str = "",
 ) -> pd.DataFrame:
-    """Create a canonical leakage-aware SafeTriage dataframe from an upload."""
+    """Create a canonical SafeTriage dataframe using the strict 28-week schema."""
     mapped = pd.DataFrame(index=df.index)
     for canonical in APPROVED_PREDICTORS:
         source = predictor_mapping[canonical]
-        if canonical == "MMS started by 28 weeks" and is_mms_start_source(source):
-            mapped[canonical] = derive_landmark_mms(df[source])
+        if canonical == "MMS started by 28 weeks":
+            normalized_source = normalized_column_name(source)
+            direct_names = {
+                normalized_column_name(x)
+                for x in [
+                    "MMS started by 28 weeks",
+                    "mms_started_by_28_weeks",
+                    "mmn_started_by_28_weeks",
+                    "supplementation started by 28 weeks",
+                ]
+            }
+            if normalized_source in direct_names:
+                mapped[canonical] = pd.to_numeric(df[source], errors="coerce")
+            else:
+                mapped[canonical] = derive_mms_started_by_28(df[source])
         else:
             mapped[canonical] = df[source]
-    if target_source and target_source != "— Not mapped —" and target_source != "— No outcome / unlabeled external data —":
+    if target_source and target_source != "— Not mapped —":
         mapped[TARGET_COLUMN] = df[target_source]
     return mapped
 
@@ -1871,12 +1853,9 @@ def align_external_feature_types(
 ) -> pd.DataFrame:
     """Align external feature dtypes with the reference model's training schema.
 
-    The CBGS source contains numeric week values for the supplementation timing
-    variables. External datasets must therefore provide compatible numeric values
-    for those canonical variables. Numeric columns are safely coerced to numeric;
-    categorical columns are converted to object/string-compatible values.
-    Values that cannot be converted to a required numeric type become missing and
-    are subsequently handled by the frozen training imputer.
+    Numeric canonical predictors are coerced to numeric and categorical predictors
+    are converted to object-compatible values. Values that cannot be converted to a
+    required numeric type become missing and are subsequently handled by the frozen training imputer.
     """
     X = X_external.copy()
 
@@ -2357,11 +2336,9 @@ if uploaded_file is None:
         """
         ### Getting started
 
-        Upload an Excel dataset containing the GDM target and the
-        leakage-aware 28-week predictor variables. The application derives
-        `MMS started by 28 weeks` from the CBGS supplementation-start week
-        when the raw CBGS field is present. For different column names, use
-        **External Validation** mode.
+        Upload an Excel dataset containing the required GDM target and
+        antepartum predictor variables. For datasets with different column
+        names, use **External Validation** mode.
 
         The application will then:
 
@@ -2399,8 +2376,6 @@ try:
     df = clean_dataframe(
         df
     )
-    raw_df = df.copy()
-    df = build_landmark_features(df)
 
 except Exception as exc:
 
@@ -2808,6 +2783,25 @@ st.caption(
     "The test partition is not used to choose the threshold."
 )
 
+# Diagnostic: show how the frozen ensemble threshold translates into positive
+# predictions for each model. This is descriptive only and does not alter the
+# threshold or use the test set for model selection.
+threshold_diagnostic = pd.DataFrame({
+    "Model": list(EXPECTED_MODEL_ORDER) + ["Equal-weight ensemble"],
+    "Predicted GDM": [
+        int((model_probabilities[name]["test"] >= threshold).sum())
+        for name in EXPECTED_MODEL_ORDER
+    ] + [int((test_ensemble_probability >= threshold).sum())],
+})
+threshold_diagnostic["Predicted No GDM"] = len(y_test) - threshold_diagnostic["Predicted GDM"]
+st.markdown("**Test-set prediction-count diagnostic at the frozen threshold**")
+st.dataframe(threshold_diagnostic, use_container_width=True, hide_index=True)
+st.caption(
+    "A zero sensitivity value means no true GDM cases were classified as GDM "
+    "at the frozen threshold; the diagnostic above shows the corresponding "
+    "number of positive predictions without changing the threshold."
+)
+
 render_threshold_curve(threshold_table, threshold)
 
 
@@ -2898,42 +2892,6 @@ st.dataframe(
     hide_index=True,
 )
 
-# Transparent threshold diagnostic: shows how many positive predictions each
-# model and the equal-weight ensemble make on the untouched test set.
-test_prediction_counts = []
-for model_name in EXPECTED_MODEL_ORDER:
-    model_probability = model_probabilities[model_name]["test"]
-    model_prediction = (model_probability >= threshold).astype(int)
-    test_prediction_counts.append(
-        {
-            "Model": model_name,
-            "Predicted GDM": int(model_prediction.sum()),
-            "Predicted No GDM": int((model_prediction == 0).sum()),
-        }
-    )
-
-ensemble_prediction = (test_ensemble_probability >= threshold).astype(int)
-test_prediction_counts.append(
-    {
-        "Model": "Equal-weight ensemble",
-        "Predicted GDM": int(ensemble_prediction.sum()),
-        "Predicted No GDM": int((ensemble_prediction == 0).sum()),
-    }
-)
-
-st.caption(
-    "Threshold diagnostic: counts below show the number of positive and "
-    "negative predictions produced on the untouched test set at the "
-    "calibration-derived threshold. A sensitivity of 0 means no true GDM "
-    "cases were classified as GDM at this threshold; it is not treated as "
-    "a test-set threshold optimization problem."
-)
-st.dataframe(
-    pd.DataFrame(test_prediction_counts),
-    width="stretch",
-    hide_index=True,
-)
-
 
 # ==============================================================================
 # MODEL-LEVEL PERFORMANCE
@@ -2941,12 +2899,6 @@ st.dataframe(
 
 st.markdown(
     "### Individual model performance"
-)
-
-st.caption(
-    "Individual models are evaluated on the untouched test set using the "
-    "same ensemble-selected threshold shown above. These are not "
-    "individually optimized model thresholds."
 )
 
 individual_records = []
@@ -3397,8 +3349,7 @@ all_conformal_sets, _, _ = conformal_prediction(
     confidence=CONFORMAL_CONFIDENCE,
 )
 
-output_df = raw_df.copy()
-output_df["SafeTriage_MMS_started_by_28_weeks"] = df["MMS started by 28 weeks"].values
+output_df = df.copy()
 
 output_df[
     "SafeTriage_GDM_probability"
@@ -3579,9 +3530,8 @@ not be interpreted as causal effects.
 st.divider()
 
 st.caption(
-    "Research prototype — not clinically validated, prospectively evaluated, "
-    "or approved as a medical device. Results should be interpreted only "
-    "within the research context."
+    "Research prototype — not clinically validated or approved as a medical device. "
+    "Results should be interpreted only within the research context."
 )
 
 st.caption(
