@@ -310,6 +310,15 @@ APP_SUBTITLE = (
 
 APP_VERSION = "Research Prototype"
 
+RESEARCH_DISCLAIMER = (
+    "SafeTriage-GDM is a research prototype for uncertainty-aware GDM risk "
+    "triage, conformal safety assessment, population-shift monitoring, and "
+    "algorithmic fairness auditing. It is not a medical device and must not "
+    "be used as a substitute for professional medical diagnosis, treatment, "
+    "or clinical decision-making."
+)
+
+
 TARGET_COLUMN = "Gestational diabetes?"
 
 RANDOM_STATE = 42
@@ -331,16 +340,13 @@ BMI_COLUMN = "Mother's pre-pregnancy BMI (kg/m2)"
 # --------------------------------------------------------------------------
 
 APPROVED_PREDICTORS = [
-    "Evidence of maternal anaemia?",
-    "Did the mother supplement with multiple micronutrients during pregnancy?",
-    "Relative to the start of pregnancy, when did multiple micronutrient supplementation start?",
-    "Relative to the start of pregnancy, when did multiple micronutrient supplementation stop?",
-    "Did the mothers just supplement with multiple micronutrients during pregnancy and nothing else?",
+    "MMS started by 28 weeks",
     "Mother's pre-pregnancy BMI (kg/m2)",
     "Mother's age (years)",
-    "Did the mother smoke during pregnancy?",
     "Parity",
 ]
+
+LANDMARK_WEEK = 28.0
 
 EXPECTED_MODEL_ORDER = [
     "Random Forest",
@@ -1659,28 +1665,82 @@ def aggregate_feature_importance(
 # ==============================================================================
 
 PREDICTOR_LABELS = {
-    "Evidence of maternal anaemia?": "Maternal anaemia",
-    "Did the mother supplement with multiple micronutrients during pregnancy?": "Micronutrient supplementation",
-    "Relative to the start of pregnancy, when did multiple micronutrient supplementation start?": "Supplementation start timing",
-    "Relative to the start of pregnancy, when did multiple micronutrient supplementation stop?": "Supplementation stop timing",
-    "Did the mothers just supplement with multiple micronutrients during pregnancy and nothing else?": "Only micronutrient supplementation",
+    "MMS started by 28 weeks": "MMS started by 28 weeks",
     "Mother's pre-pregnancy BMI (kg/m2)": "Pre-pregnancy BMI",
     "Mother's age (years)": "Maternal age",
-    "Did the mother smoke during pregnancy?": "Smoking during pregnancy",
     "Parity": "Parity",
 }
 
 COLUMN_ALIASES = {
-    "Evidence of maternal anaemia?": ["maternal anaemia", "maternal anemia", "anaemia", "anemia"],
-    "Did the mother supplement with multiple micronutrients during pregnancy?": ["micronutrient supplementation", "multiple micronutrient supplementation", "mmn supplementation"],
-    "Relative to the start of pregnancy, when did multiple micronutrient supplementation start?": ["supplementation start timing", "mmn start", "supplementation start"],
-    "Relative to the start of pregnancy, when did multiple micronutrient supplementation stop?": ["supplementation stop timing", "mmn stop", "supplementation stop"],
-    "Did the mothers just supplement with multiple micronutrients during pregnancy and nothing else?": ["only micronutrient supplementation", "only mmn", "micronutrients only"],
-    "Mother's pre-pregnancy BMI (kg/m2)": ["pre pregnancy bmi", "prepregnancy bmi", "prepreg bmi", "pre pregnancy body mass index", "bmi"],
+    "MMS started by 28 weeks": [
+        "mms started by 28 weeks",
+        "mms prior to wk28",
+        "mms prior to week 28",
+        "mms_prior_to_wk28",
+        "mms_started_by_28_weeks",
+        "supplementation started by 28 weeks",
+        "supplementation start timing",
+        "mmn start",
+        "supplementation start",
+        "Relative to the start of pregnancy, when did multiple micronutrient supplementation start?",
+    ],
+    "Mother's pre-pregnancy BMI (kg/m2)": [
+        "pre pregnancy bmi", "prepregnancy bmi", "prepreg bmi",
+        "pre pregnancy body mass index", "bmi"
+    ],
     "Mother's age (years)": ["maternal age", "mother age", "age years", "age"],
-    "Did the mother smoke during pregnancy?": ["smoking during pregnancy", "maternal smoking", "smoked during pregnancy", "smoking"],
     "Parity": ["parity", "number of previous births", "birth order"],
 }
+
+
+def derive_landmark_mms(value: pd.Series) -> pd.Series:
+    """Convert MMS start timing into a binary feature known by week 28.
+
+    Values <= 28 weeks are coded 1, values > 28 weeks as 0, and missing
+    start timing remains missing. This prevents whole-pregnancy MMS exposure,
+    stop timing, and total duration from entering the model.
+    """
+    numeric = pd.to_numeric(value, errors="coerce")
+    result = pd.Series(np.nan, index=value.index, dtype=float)
+    valid = numeric.notna()
+    result.loc[valid] = (numeric.loc[valid] <= LANDMARK_WEEK).astype(float)
+    return result
+
+
+def is_mms_start_source(source_name: str) -> bool:
+    normalized = normalized_column_name(source_name)
+    return (
+        "supplementation start" in normalized
+        or "mmn start" in normalized
+        or "mms start" in normalized
+        or "started by 28" in normalized
+        or "prior to wk28" in normalized
+        or "prior to week 28" in normalized
+    )
+
+
+def build_landmark_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Construct the leakage-aware 28-week feature matrix from raw CBGS or canonical data."""
+    out = df.copy()
+    canonical = "MMS started by 28 weeks"
+    if canonical not in out.columns:
+        start_candidates = [
+            "Relative to the start of pregnancy, when did multiple micronutrient supplementation start?",
+            "supplementation start timing",
+            "mmn start",
+            "mms start",
+        ]
+        normalized = {normalized_column_name(c): c for c in out.columns}
+        source = None
+        for candidate in start_candidates:
+            source = normalized.get(normalized_column_name(candidate))
+            if source is not None:
+                break
+        if source is not None:
+            out[canonical] = derive_landmark_mms(out[source])
+    else:
+        out[canonical] = pd.to_numeric(out[canonical], errors="coerce")
+    return out
 
 
 def normalized_column_name(value: str) -> str:
@@ -1721,8 +1781,9 @@ def schema_mapping_ui(
     st.markdown("#### Map uploaded columns to the SafeTriage-GDM schema")
     st.caption(
         "Column names and order may differ from the reference dataset. "
-        "Extra columns are ignored. Each required predictor must map to one "
-        "distinct uploaded column."
+        "Extra columns are ignored. The MMS feature is interpreted at the "
+        "28-week landmark; raw whole-pregnancy MMS, stop, and duration fields "
+        "are not accepted as model predictors."
     )
 
     with st.expander("Predictor mapping", expanded=True):
@@ -1786,11 +1847,15 @@ def apply_schema_mapping(
     predictor_mapping: Dict[str, str],
     target_source: str = "",
 ) -> pd.DataFrame:
-    """Create a canonical SafeTriage dataframe from an uploaded dataset."""
+    """Create a canonical leakage-aware SafeTriage dataframe from an upload."""
     mapped = pd.DataFrame(index=df.index)
     for canonical in APPROVED_PREDICTORS:
-        mapped[canonical] = df[predictor_mapping[canonical]]
-    if target_source and target_source != "— Not mapped —":
+        source = predictor_mapping[canonical]
+        if canonical == "MMS started by 28 weeks" and is_mms_start_source(source):
+            mapped[canonical] = derive_landmark_mms(df[source])
+        else:
+            mapped[canonical] = df[source]
+    if target_source and target_source != "— Not mapped —" and target_source != "— No outcome / unlabeled external data —":
         mapped[TARGET_COLUMN] = df[target_source]
     return mapped
 
@@ -2277,6 +2342,8 @@ if analysis_mode == "External Validation":
     st.stop()
 
 
+st.warning(RESEARCH_DISCLAIMER)
+
 # ==============================================================================
 # DATA UPLOAD
 # ==============================================================================
@@ -2292,9 +2359,11 @@ if uploaded_file is None:
         """
         ### Getting started
 
-        Upload an Excel dataset containing the required GDM target and
-        antepartum predictor variables. For datasets with different column
-        names, use **External Validation** mode.
+        Upload an Excel dataset containing the GDM target and the
+        leakage-aware 28-week predictor variables. The application derives
+        `MMS started by 28 weeks` from the CBGS supplementation-start week
+        when the raw CBGS field is present. For different column names, use
+        **External Validation** mode.
 
         The application will then:
 
@@ -2332,6 +2401,8 @@ try:
     df = clean_dataframe(
         df
     )
+    raw_df = df.copy()
+    df = build_landmark_features(df)
 
 except Exception as exc:
 
@@ -3286,7 +3357,8 @@ all_conformal_sets, _, _ = conformal_prediction(
     confidence=CONFORMAL_CONFIDENCE,
 )
 
-output_df = df.copy()
+output_df = raw_df.copy()
+output_df["SafeTriage_MMS_started_by_28_weeks"] = df["MMS started by 28 weeks"].values
 
 output_df[
     "SafeTriage_GDM_probability"
