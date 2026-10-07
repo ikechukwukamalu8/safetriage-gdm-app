@@ -134,15 +134,25 @@ max_iter = 5000
 solver = lbfgs
 ```
 
-The ensemble probability is:
+The three models are combined using a **development-data-weighted ensemble**. Non-negative weights sum to 1 and are learned from out-of-fold predictions within the training/development partition only. Neither the calibration partition nor the final test partition is used to learn the ensemble weights.
 
-\[
-P(GDM)=\frac{P_{RF}(GDM)+P_{XGB}(GDM)+P_{LR}(GDM)}{3}.
-\]
+The application also retains the individual model results so that a weighted ensemble is not assumed to be superior without evaluation.
+
+### 6.1 Development-only hyperparameter tuning
+
+The three model families are tuned using stratified 5-fold cross-validation inside the training/development partition. Each inner fold independently performs training-only ROSE-style balancing and preprocessing.
+
+The final calibration and test partitions are excluded from hyperparameter tuning.
+
+### 6.2 Development-only ensemble weighting
+
+After selecting model hyperparameters, out-of-fold training predictions are used to select non-negative ensemble weights on a simplex. Precision-recall AUC is the primary weight-selection criterion, with ROC-AUC used as a tie-breaker.
+
+The resulting weights are frozen before calibration and test evaluation.
 
 ### 6. Threshold selection
 
-The decision threshold is selected using development/calibration information and is not optimized on the final test set.
+The decision threshold is selected using the calibration partition only. The research prototype maximizes **F2**, giving greater weight to sensitivity, subject to a prespecified **minimum specificity of 60%**. This constraint prevents a very low threshold from classifying nearly all observations as GDM simply to maximize recall. The 60% specificity floor is a methodological research constraint, not a clinical recommendation. The final test partition is never used to choose the threshold.
 
 ### 7. Conformal prediction
 
@@ -528,3 +538,47 @@ GitHub repository.
 # License
 
 This project is provided for research and educational purposes. Review the repository license before using, modifying, or redistributing the software or associated datasets.
+
+
+## 🤖 Model Architecture
+
+SafeTriage-GDM retains Random Forest, XGBoost, and Logistic Regression. Hyperparameters are selected using 5-fold stratified cross-validation inside the training partition only; calibration and test data remain untouched for tuning.
+
+## Interpretation of Test-Set Performance
+
+The final test partition is used only for evaluation after model fitting, ensemble-weight learning, conformal calibration, and threshold selection have been completed.
+
+The reported test-set discrimination should be interpreted conservatively. A ROC-AUC around 0.61 represents **modest discrimination**, not high predictive performance. Threshold selection can change sensitivity and specificity, but it cannot improve the underlying ROC-AUC.
+
+The current thresholding strategy selects the decision threshold from the calibration partition by maximizing F2 subject to a prespecified minimum specificity of 60%. The 25% test partition is not used to select this threshold.
+
+A typical interpretation statement is:
+
+> The model demonstrates modest discrimination. At the prespecified calibration-derived threshold, sensitivity and specificity are reported on the untouched test set. These exploratory results do not establish clinical diagnostic performance.
+
+The application therefore does not claim that a favorable sensitivity, specificity, or F1 score constitutes clinical validation.
+
+## Conformal Prediction Interpretation
+
+SafeTriage-GDM uses a 90% split-conformal prediction procedure with a separate calibration partition. The application reports both:
+
+- observed test-set coverage; and
+- prediction-set composition.
+
+Prediction sets may contain `{GDM}`, `{No GDM}`, or `{GDM, No GDM}`. The latter indicates that both outcomes remain plausible under the conformal procedure; it does not represent simultaneous diagnoses.
+
+Conformal coverage is interpreted under the assumptions of split conformal inference. It does not establish clinical safety, diagnostic validity, or prospective clinical performance.
+
+## Fairness Audit Interpretation
+
+The fairness module reports age-group selection rates and false-positive rates. It is **not a complete Equalized Odds assessment**.
+
+Because very small subgroups can produce unstable estimates, age groups with fewer than 10 observations are retained in the displayed table for transparency but are excluded from the headline age-group false-positive-rate disparity. Such groups should not be used to make substantive subgroup fairness conclusions.
+
+The fairness results are therefore exploratory and should be interpreted together with subgroup sample sizes and uncertainty.
+
+## Explainability Interpretation
+
+Feature importance and model-based contribution measures describe predictive model behavior. They are not causal effects.
+
+In particular, a feature receiving high predictive importance should not be interpreted as evidence that changing that feature would causally change GDM risk.
