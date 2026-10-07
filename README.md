@@ -775,6 +775,138 @@ Users are responsible for ensuring that datasets uploaded to the application are
 
 ---
 
+# 🧪 Public Demonstration Datasets
+
+The repository may include synthetic datasets created specifically for
+software demonstration, reproducibility testing, external-validation
+workflow testing, fairness auditing, population-stability monitoring, and
+schema-mapping demonstrations.
+
+These files are **synthetic** and are not the original Cambridge Baby Growth
+Study observations.
+
+## Recommended Public Datasets
+
+### 1. `SafeTriage_GDM_external_synthetic_test.xlsx`
+
+Main synthetic external-validation demonstration dataset.
+
+Characteristics:
+
+- 1,100 rows
+- 1,000 observations with known GDM outcomes
+- 100 observations without a GDM outcome
+- 14 approved predictors
+- Designed for the application's external-validation workflow
+- Contains synthetic observations only
+
+Recommended uses:
+
+- External-validation demonstration
+- Labeled and unlabeled inference
+- Dataset validation
+- Model evaluation workflow
+
+### 2. `SafeTriage_GDM_external_renamed_schema_test.xlsx`
+
+Synthetic external dataset using alternative, simplified variable names.
+
+Example schema:
+
+```text
+maternal_anemia
+mmn_data_available
+mmn_supplementation
+mmn_start
+mmn_stop
+only_mmn
+mmn_duration
+prepreg_bmi
+height_cm
+prepreg_weight
+maternal_age
+smoking
+twins
+parity
+gdm_status
+```
+
+Recommended uses:
+
+- External dataset integration
+- Flexible predictor mapping
+- Target-column mapping
+- Schema compatibility testing
+
+### 3. `SafeTriage_GDM_fairness_psi_stress_test.xlsx`
+
+Synthetic dataset designed to exercise the fairness and population-stability
+components of SafeTriage-GDM.
+
+Characteristics:
+
+- 1,500 rows
+- 1,000 observations with known GDM outcomes
+- 500 observations without a GDM outcome
+- 14 approved predictors
+- Contains the canonical target column `Gestational diabetes?`
+
+Recommended uses:
+
+- Age-group fairness auditing
+- Selection-rate analysis
+- False-positive-rate analysis
+- BMI population-stability monitoring
+- PSI stress testing
+- Labeled/unlabeled inference testing
+
+## 🚫 Original CBGS Research Dataset
+
+The original Cambridge Baby Growth Study dataset used during the research
+work is **not included in this public repository**.
+
+The original dataset contains individual-level research observations and
+should only be accessed, processed, or shared in accordance with the
+applicable data-access permissions, ethical requirements, institutional
+policies, and/or dataset-provider conditions.
+
+Therefore:
+
+```text
+Public GitHub Repository
+        │
+        ├── Application source code
+        ├── Documentation
+        └── Synthetic demonstration datasets
+                  │
+                  ▼
+             Safe for public
+             software testing
+
+Original CBGS data
+        │
+        ▼
+Not distributed through this repository
+```
+
+Users should **not** add `dataCBGS_dataset.xlsx` or other restricted
+individual-level datasets to the public repository unless they have explicit
+permission to redistribute the data.
+
+## Synthetic-data disclaimer
+
+The demonstration datasets are intended only for:
+
+- Software testing
+- Research-method demonstration
+- Reproducibility examples
+- Interface testing
+- External-validation workflow demonstration
+- Fairness and population-shift testing
+
+They are **not clinical datasets**, are not evidence of model performance
+in a real-world population, and must not be used for medical decision-making.
+
 # 🚀 Quick Start
 
 ## 1. Clone the Repository
@@ -864,8 +996,20 @@ safetriage-gdm-app/
 │
 ├── app.py
 ├── requirements.txt
-└── README.md
+├── README.md
+├── .gitignore
+│
+└── datasets/
+    ├── README.md
+    ├── SafeTriage_GDM_external_synthetic_test.xlsx
+    ├── SafeTriage_GDM_external_renamed_schema_test.xlsx
+    └── SafeTriage_GDM_fairness_psi_stress_test.xlsx
 ```
+
+The repository is designed to contain the application source code and
+synthetic demonstration datasets that can be used to reproduce and test
+the application's workflows without exposing restricted individual-level
+research data.
 
 ## `app.py`
 
@@ -904,6 +1048,14 @@ Python dependency specification.
 ## `README.md`
 
 Project documentation.
+
+## `datasets/`
+
+Contains synthetic demonstration datasets and a dataset-specific README
+describing their intended testing purposes.
+
+The datasets directory must not be used to distribute restricted
+individual-level research data.
 
 ---
 
@@ -1295,6 +1447,23 @@ for Gestational Diabetes Mellitus Risk with Algorithmic Fairness
 Auditing and Conformal Safety Bounds.
 GitHub repository.
 ```
+
+---
+
+# 🔒 Public Repository Data Policy
+
+For the public GitHub repository:
+
+- Commit source code and documentation.
+- Commit only synthetic demonstration datasets intended for public release.
+- Do not commit the original CBGS individual-level research dataset.
+- Do not commit identifiable patient information.
+- Do not commit API keys, passwords, access tokens, or Streamlit secrets.
+- Do not commit private research files merely because they are required for
+  local reproduction.
+
+The public synthetic datasets are intended to make the application
+demonstrable without redistributing restricted research data.
 
 ---
 
