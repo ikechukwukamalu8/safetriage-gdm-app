@@ -69,6 +69,7 @@ SafeTriage-GDM investigates several dimensions of responsible machine learning f
 8. Explainable feature contribution analysis.
 9. Leakage-aware predictor selection for antepartum modelling.
 10. Evaluation of predictive performance under class imbalance.
+11. Reproducible testing using fully synthetic research datasets.
 
 ---
 
@@ -215,6 +216,8 @@ The test partition remains untouched for final predictive performance evaluation
 
 > The test partition is not used to select the classification threshold.
 
+Unlabeled observations are retained separately and can be processed for inference after model development.
+
 ---
 
 # 🧬 Predictor Selection and Leakage Control
@@ -300,7 +303,7 @@ Training
     └── ROSE-style balancing
             │
             ▼
-       Model fitting
+        Model fitting
 
 Calibration
     │
@@ -361,6 +364,269 @@ The preprocessing transformation is fitted on the training data and subsequently
 
 ---
 
+# 🧪 Public Synthetic Test Datasets
+
+Because the original Cambridge Baby Growth Study data are not redistributed with this repository, SafeTriage-GDM provides **fully synthetic datasets** for reproducible application testing.
+
+These datasets contain **no real patient records** and should not be interpreted as clinical evidence.
+
+The synthetic datasets are designed to allow another researcher, reviewer, student, or developer to test the complete application without access to the original research dataset.
+
+## Dataset 1 — General Synthetic Demonstration Dataset
+
+The first synthetic dataset is designed for general end-to-end testing of the SafeTriage-GDM application.
+
+Characteristics:
+
+| Property | Value |
+|---|---:|
+| Total rows | 1,100 |
+| Known GDM outcomes | 1,000 |
+| Unlabeled observations | 100 |
+| Required predictors | 14/14 |
+| GDM among labeled observations | 153 |
+| No GDM among labeled observations | 847 |
+| Target type | Synthetic |
+| Direct identifiers | None |
+
+The dataset can be used to test:
+
+- Dataset validation
+- Predictor validation
+- 60/15/25 stratified splitting
+- MICE-style imputation
+- Training-only ROSE-style balancing
+- Model training
+- Ensemble prediction
+- Calibration-derived threshold selection
+- Test-set evaluation
+- Conformal prediction
+- Uncertainty quantification
+- Fairness auditing
+- BMI population-stability monitoring
+- Explainability
+- Inference on unlabeled observations
+- CSV export
+
+Recommended repository filename:
+
+```text
+SafeTriage_GDM_external_synthetic_test.xlsx
+```
+
+---
+
+## Dataset 2 — Fairness and Population-Shift Stress-Test Dataset
+
+The second synthetic dataset is specifically designed to stress-test the **fairness auditing** and **BMI population-stability monitoring** components.
+
+Characteristics:
+
+| Property | Value |
+|---|---:|
+| Total rows | 1,500 |
+| Known GDM outcomes | 1,000 |
+| Unlabeled observations | 500 |
+| Required predictors | 14/14 |
+| No GDM among labeled observations | 857 |
+| GDM among labeled observations | 143 |
+| GDM prevalence among labeled observations | 14.3% |
+| Direct identifiers | None |
+| Dataset type | Fully synthetic |
+
+This dataset intentionally represents a different synthetic population distribution from the original modelling population.
+
+It is particularly useful for demonstrating:
+
+- Fairness disparities across age groups
+- BMI population shift
+- PSI monitoring
+- Conformal prediction behaviour
+- Model degradation under distributional differences
+- Robustness of the application's warnings
+- Behaviour of the pipeline under weak predictive discrimination
+
+### Example stress-test observations
+
+When tested through the application, this synthetic population produced approximately:
+
+```text
+Age-group FPR disparity ≈ 0.488
+BMI PSI ≈ 0.873
+```
+
+The BMI PSI substantially exceeded the monitoring threshold of `0.20`, causing the application to correctly report a substantial population shift.
+
+The fairness audit also identified considerable differences in false-positive rates across age groups.
+
+These results are **intentional properties of the synthetic stress-test dataset**, not evidence about real-world GDM populations.
+
+Recommended repository filename:
+
+```text
+SafeTriage_GDM_fairness_psi_stress_test.xlsx
+```
+
+---
+
+## Synthetic Dataset Safety Notice
+
+The synthetic datasets are provided solely for:
+
+- Software testing
+- Reproducibility
+- Demonstration
+- Methodological experimentation
+- Responsible-AI research
+- Educational purposes
+
+They must **not** be interpreted as:
+
+- Real patient data
+- Clinical validation data
+- External clinical validation cohorts
+- Evidence of model effectiveness
+- Evidence of clinical safety
+- Evidence of clinical utility
+
+> **Synthetic test performance is not clinical evidence.**
+
+---
+
+# 🔬 Synthetic Stress-Test Interpretation
+
+The second synthetic dataset is intentionally useful because it does **not** make the model appear artificially successful.
+
+For example, a stress-test run produced approximately:
+
+| Metric | Ensemble |
+|---|---:|
+| ROC-AUC | 0.535 |
+| PR-AUC | 0.188 |
+| Accuracy | 0.624 |
+| Balanced Accuracy | 0.503 |
+| Sensitivity | 0.333 |
+| Specificity | 0.673 |
+| Precision | 0.146 |
+| F1 | 0.203 |
+| Brier Score | 0.171 |
+| Log Loss | 0.522 |
+
+These results indicate weak predictive discrimination on that synthetic population.
+
+The purpose of this dataset is **not** to demonstrate high predictive performance.
+
+Instead, it tests whether the application transparently exposes:
+
+- Weak discrimination
+- Class imbalance
+- Prediction uncertainty
+- Fairness disparities
+- Population shift
+- Conformal prediction behaviour
+
+This is consistent with the responsible-AI design philosophy of SafeTriage-GDM.
+
+---
+
+# 🧪 How to Test the Application with the Synthetic Datasets
+
+## General Testing Workflow
+
+1. Open the [SafeTriage-GDM application](https://safetriage-gdm-app-3v5zd7afo2bxevoifgfjmw.streamlit.app/).
+2. Upload one of the synthetic `.xlsx` datasets.
+3. Confirm that the dataset validation reports all required predictors.
+4. Confirm that the expected number of rows is detected.
+5. Confirm that labeled and unlabeled observations are distinguished.
+6. Confirm that only labeled observations enter supervised model development.
+7. Confirm the 60/15/25 split.
+8. Confirm that ROSE-style balancing occurs only in training.
+9. Inspect model performance.
+10. Inspect the calibration-derived threshold.
+11. Inspect ROC and precision-recall curves.
+12. Inspect the confusion matrix.
+13. Inspect conformal prediction sets.
+14. Inspect uncertainty distributions.
+15. Inspect the age-group fairness audit.
+16. Inspect BMI PSI monitoring.
+17. Inspect feature contribution analysis.
+18. Download the dataset-level prediction CSV.
+
+---
+
+# 🧪 Testing the Fairness / PSI Stress Dataset
+
+For the second dataset, particular attention should be paid to:
+
+### Fairness Audit
+
+The application should report age-group selection rates and false-positive rates.
+
+The stress-test population can produce substantial age-group differences.
+
+### BMI PSI
+
+The application should compare:
+
+```text
+Training/reference BMI distribution
+            vs.
+Current uploaded BMI distribution
+```
+
+A PSI value above `0.20` should trigger the population-shift warning.
+
+### Conformal Prediction
+
+The application should continue to calculate conformal prediction sets using the dedicated calibration partition.
+
+Population shift should **not** be used to silently modify the conformal threshold.
+
+---
+
+# 🧪 Synthetic Stress-Test vs External Validation
+
+The synthetic datasets should not be described as true external clinical validation datasets.
+
+A true external validation workflow would be:
+
+```text
+Original Training Dataset
+        │
+        ▼
+Frozen Model
+        │
+        ▼
+Completely Independent External Dataset
+        │
+        ▼
+Prediction Only
+        │
+        ▼
+External Validation Metrics
+```
+
+In contrast, the current SafeTriage-GDM application trains and evaluates a model on the uploaded dataset:
+
+```text
+Uploaded Dataset
+        │
+        ▼
+Known Outcomes
+        │
+        ├── Training
+        ├── Calibration
+        └── Test
+```
+
+Therefore, the synthetic datasets are best described as:
+
+> **Synthetic demonstration and stress-test datasets**
+
+rather than clinical external-validation cohorts.
+
+---
+
 # 🛡️ Conformal Prediction
 
 SafeTriage-GDM uses a dedicated calibration partition to construct a split-conformal prediction threshold.
@@ -386,6 +652,26 @@ The application uses:
 The conformal threshold is estimated from the dedicated calibration partition.
 
 Population-shift monitoring does **not** dynamically modify the conformal threshold.
+
+## Interpreting Prediction Sets
+
+The application can produce:
+
+```text
+{GDM}
+{No GDM}
+{GDM, No GDM}
+{Uncertain}
+```
+
+Interpretation:
+
+- `{GDM}` → GDM is the only outcome retained by the conformal procedure.
+- `{No GDM}` → No GDM is the only outcome retained.
+- `{GDM, No GDM}` → Both outcomes remain plausible at the specified conformal confidence level.
+- `{Uncertain}` → Neither outcome satisfies the retained conformal criterion under the implemented procedure.
+
+> `{GDM, No GDM}` does **not** mean that a person simultaneously has and does not have GDM. It means that the conformal procedure does not have sufficient evidence to exclude either outcome.
 
 > **Important:** Conformal prediction provides a statistical coverage framework under its underlying assumptions. It does not establish clinical safety, diagnostic validity, or medical reliability.
 
@@ -542,6 +828,18 @@ The Streamlit application provides interactive visualizations for research analy
 
 These include:
 
+### Outcome Distribution
+
+Displays the distribution of known GDM outcomes.
+
+### Partition Class Distribution
+
+Shows GDM and No-GDM counts across:
+
+- Training
+- Calibration
+- Test
+
 ### Model Performance Comparison
 
 Compares:
@@ -558,6 +856,7 @@ across:
 - Random Forest
 - XGBoost
 - Logistic Regression
+- Ensemble where applicable
 
 ### ROC Curves
 
@@ -579,6 +878,14 @@ The application displays sensitivity, specificity, and balanced accuracy across 
 ### Confusion Matrix
 
 The final ensemble confusion matrix is displayed both as a table and as a visual chart.
+
+### Predicted Probability Distribution
+
+The distribution of predicted GDM probabilities is visualized for observed GDM and No-GDM observations.
+
+### Conformal Prediction Sets
+
+The distribution of conformal prediction sets is displayed.
 
 ### Uncertainty Visualization
 
@@ -849,23 +1156,28 @@ numpy
 pandas
 xgboost
 openpyxl
-joblib
-imbalanced-learn
 altair
 ```
 
-The current application uses Altair for interactive visualization and does not require Matplotlib.
+The application uses Altair for interactive visualization.
 
 ---
 
 # 📂 Repository Structure
+
+Recommended repository structure:
 
 ```text
 safetriage-gdm-app/
 │
 ├── app.py
 ├── requirements.txt
-└── README.md
+├── README.md
+│
+└── data/
+    ├── README.md
+    ├── SafeTriage_GDM_external_synthetic_test.xlsx
+    └── SafeTriage_GDM_fairness_psi_stress_test.xlsx
 ```
 
 ## `app.py`
@@ -892,6 +1204,8 @@ Main Streamlit application containing:
 - Precision-recall curves
 - Threshold analysis
 - Confusion matrix
+- Predicted probability visualization
+- Conformal prediction visualization
 - Fairness auditing
 - BMI PSI monitoring
 - Feature contribution analysis
@@ -905,6 +1219,12 @@ Python dependency specification.
 ## `README.md`
 
 Project documentation.
+
+## `data/`
+
+Public synthetic demonstration and stress-test datasets.
+
+> The original research dataset is not included in this repository.
 
 ---
 
@@ -930,6 +1250,8 @@ The calibration partition is used for:
 - Conformal calibration
 
 The final test partition is reserved for performance evaluation.
+
+Synthetic datasets included in the repository are intended to make software-level testing reproducible without redistributing the original research data.
 
 ---
 
@@ -1057,6 +1379,14 @@ Performance on one dataset does not establish performance in other:
 
 External validation is required before drawing conclusions about generalizability.
 
+## Synthetic Dataset Limitations
+
+The public synthetic datasets are intended for software and methodological testing.
+
+They do not reproduce the biological, clinical, epidemiological, or demographic complexity of a real-world GDM cohort.
+
+Performance obtained using the synthetic datasets should therefore not be interpreted as evidence of clinical performance.
+
 ## Prediction Timing
 
 Some pregnancy-related variables become available only at particular points during pregnancy.
@@ -1082,6 +1412,14 @@ Conformal prediction relies on assumptions such as exchangeability between calib
 Violation of these assumptions can affect empirical coverage.
 
 Conformal prediction should not be interpreted as a guarantee of clinical safety.
+
+## Population Shift Limitations
+
+PSI is a monitoring statistic rather than a proof of model failure.
+
+A detected distribution shift does not automatically imply that predictions are incorrect.
+
+Conversely, a low PSI value does not guarantee model validity.
 
 ## Explainability Limitations
 
@@ -1198,39 +1536,43 @@ No single metric should be interpreted in isolation.
 
 # 🧭 Responsible AI Considerations
 
-SafeTriage-GDM is designed around several responsible machine-learning principles:
+SafeTriage-GDM is designed around several responsible machine-learning principles.
 
-### Transparency
+## Transparency
 
 The modelling architecture and evaluation metrics are explicitly documented.
 
-### Leakage Control
+## Leakage Control
 
 Post-delivery variables are excluded from the antepartum predictor schema.
 
-### Test Isolation
+## Test Isolation
 
 The final test partition is not used for model fitting or threshold selection.
 
-### Uncertainty Awareness
+## Uncertainty Awareness
 
 The system reports several uncertainty-related quantities rather than presenting predictions without context.
 
-### Fairness Monitoring
+## Fairness Monitoring
 
 Performance-related disparities are examined across maternal age groups.
 
-### Population Monitoring
+## Population Monitoring
 
 BMI population stability is monitored to identify potential distributional changes.
 
-### Explainability
+## Explainability
 
 Feature contribution information is presented to support model inspection.
 
-### Privacy
+## Privacy
 
 Users are instructed not to upload directly identifiable patient information.
+
+## Reproducibility
+
+Fully synthetic datasets are provided so that users can test the application without access to the original research data.
 
 ---
 
@@ -1249,6 +1591,8 @@ It is not:
 Predictions, probabilities, uncertainty estimates, conformal prediction sets, fairness metrics, population-shift statistics, and explanations should not be used as a substitute for assessment by qualified healthcare professionals.
 
 The system has not been clinically validated, externally validated, prospectively evaluated, or approved for clinical use.
+
+The synthetic datasets distributed with this repository are also **not clinical validation datasets**.
 
 ---
 
@@ -1307,7 +1651,7 @@ Please review the repository license before using, modifying, or redistributing 
 
 ---
 
-## ⭐ Project Summary
+# ⭐ Project Summary
 
 SafeTriage-GDM integrates:
 
@@ -1337,6 +1681,8 @@ Fairness Auditing
 BMI Population Stability
           +
 Explainable AI
+          +
+Synthetic Stress Testing
           +
 Interactive Research Dashboard
 ```
