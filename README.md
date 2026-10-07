@@ -8,220 +8,86 @@
 [![XGBoost](https://img.shields.io/badge/XGBoost-3.x-green.svg)](https://xgboost.readthedocs.io/)
 [![Plotly](https://img.shields.io/badge/Visualization-Plotly-blue.svg)](https://plotly.com/python/)
 
-**SafeTriage-GDM** is a standalone research prototype for uncertainty-aware Gestational Diabetes Mellitus (GDM) risk triage, conformal prediction, algorithmic fairness auditing, population-shift monitoring, and explainable machine learning.
+**SafeTriage-GDM** is a research prototype for uncertainty-aware Gestational Diabetes Mellitus (GDM) risk triage, conformal prediction, algorithmic fairness auditing, population-shift monitoring, and explainable machine learning.
 
-The system combines three complementary machine-learning models:
+The application trains exactly three predictive models:
 
-- Random Forest
-- XGBoost
-- Logistic Regression
+1. Random Forest
+2. XGBoost
+3. Logistic Regression
 
-The three models produce individual GDM probabilities, which are combined using an equal-weight probability ensemble:
+Their predicted probabilities are combined using an equal-weight ensemble:
 
 ```text
 P(GDM) = [P_RF(GDM) + P_XGB(GDM) + P_LR(GDM)] / 3
 ```
 
-SafeTriage-GDM is designed for **research and methodological evaluation**.
-
-> **Important:** SafeTriage-GDM is not a medical device, diagnostic system, treatment recommendation system, or autonomous clinical decision-making system. It must not be used as a substitute for professional medical diagnosis, treatment, or clinical decision-making.
+> **Important research disclaimer:** SafeTriage-GDM is not a medical device, diagnostic system, treatment recommendation system, or autonomous clinical decision-making system. It must not be used as a substitute for professional medical diagnosis, treatment, or clinical decision-making.
 
 ---
 
 # 🌐 Live Application
 
-**[Open SafeTriage-GDM](https://safetriage-gdm-app-3v5zd7afo2bxevoifgfjmw.streamlit.app/)**
+**SafeTriage-GDM:**
 
-The application allows researchers to upload a compatible Excel dataset and execute the complete modelling workflow, including:
+https://safetriage-gdm-app-3v5zd7afo2bxevoifgfjmw.streamlit.app/
+
+The application accepts Excel datasets (`.xlsx` and `.xls`) and provides:
 
 - Dataset validation
 - Leakage-aware predictor selection
-- MICE-style imputation
+- 60/15/25 stratified train/calibration/test splitting
+- MICE-style iterative imputation
 - Training-only ROSE-style balancing
-- Random Forest modelling
-- XGBoost modelling
-- Logistic Regression modelling
+- Random Forest, XGBoost, and Logistic Regression
 - Equal-weight ensemble prediction
-- Calibration-based threshold selection
-- Conformal prediction
-- Uncertainty quantification
-- Performance evaluation
-- Fairness auditing
-- BMI population-shift monitoring
-- Explainability analysis
-- Dataset-level prediction export
-
-> **Privacy notice:** Do not upload names, medical record numbers, addresses, telephone numbers, email addresses, national identification numbers, or other directly identifiable patient information.
-
----
-
-# 🎯 Research Objectives
-
-SafeTriage-GDM investigates several dimensions of responsible machine learning for GDM risk modelling:
-
-1. GDM risk prediction using heterogeneous machine-learning algorithms.
-2. Comparison of nonlinear and linear predictive models.
-3. Equal-weight probability ensembling.
-4. Uncertainty quantification through model disagreement and entropy.
-5. Conformal prediction using a dedicated calibration partition.
-6. Algorithmic fairness assessment across maternal age groups.
-7. Population-shift monitoring using maternal pre-pregnancy BMI.
-8. Explainable feature contribution analysis.
-9. Leakage-aware predictor selection for antepartum modelling.
-10. Evaluation of predictive performance under class imbalance.
+- Calibration-derived decision threshold
+- Untouched test-set evaluation
+- 90% conformal prediction
+- Ensemble uncertainty quantification
+- Age-group fairness auditing
+- BMI population-stability monitoring using PSI
+- Model explainability
+- Dataset-level predictions
+- CSV export
+- Interactive Plotly visualizations
 
 ---
 
-# 🧠 Model Architecture
+# 🔐 Privacy and Data Protection
 
-SafeTriage-GDM uses exactly **three predictive models**.
+Do **not** upload or commit directly identifiable patient information, including:
 
-## 1. Random Forest
+- Names
+- Medical record numbers
+- Addresses
+- Telephone numbers
+- Email addresses
+- National identification numbers
+- Other direct identifiers
 
-Random Forest is used to capture nonlinear relationships and interactions between maternal and pregnancy-related variables.
+Users are responsible for ensuring that uploaded datasets are appropriately de-identified and that their use complies with applicable ethical, institutional, legal, and data-protection requirements.
 
-Configuration:
-
-```text
-n_estimators = 300
-min_samples_leaf = 3
-random_state = 42
-```
-
-## 2. XGBoost
-
-XGBoost provides a gradient-boosted tree model capable of representing nonlinear predictive relationships.
-
-Configuration:
-
-```text
-n_estimators = 300
-max_depth = 3
-learning_rate = 0.03
-subsample = 0.90
-colsample_bytree = 0.90
-objective = binary:logistic
-```
-
-## 3. Logistic Regression
-
-Logistic Regression provides a comparatively interpretable linear modelling baseline.
-
-Configuration:
-
-```text
-max_iter = 5000
-```
-
-## Ensemble Probability
-
-The final research probability is calculated as:
-
-```text
-P_ensemble = (P_RF + P_XGB + P_LR) / 3
-```
-
-where:
-
-- `P_RF` = Random Forest probability of GDM
-- `P_XGB` = XGBoost probability of GDM
-- `P_LR` = Logistic Regression probability of GDM
-
-All three models contribute equally to the final ensemble probability.
+The original Cambridge Baby Growth Study individual-level dataset is **not included in this public repository**.
 
 ---
 
-# 📊 Complete Data Processing Pipeline
+# 🧬 Predictor Schema
+
+The updated application uses **12 approved predictors**.
+
+The important change in this version is that:
 
 ```text
-Excel Dataset
-      │
-      ▼
-Dataset Validation
-      │
-      ▼
-GDM Ground-Truth Identification
-      │
-      ├── Labeled observations
-      │        │
-      │        └── Train / Calibration / Test
-      │
-      └── Unlabeled observations
-               │
-               └── Inference population
-      │
-      ▼
-Antepartum Predictor Selection
-      │
-      ▼
-60 / 15 / 25 Stratified Split
-      │
-      ├── 60% Training
-      ├── 15% Calibration
-      └── 25% Test
-      │
-      ▼
-Training-Only ROSE-Style Balancing
-      │
-      ▼
-MICE-Style Iterative Imputation
-      │
-      ▼
-Categorical Imputation + One-Hot Encoding
-      │
-      ▼
-Standardization
-      │
-      ▼
-┌─────────────────────────┐
-│ Random Forest           │
-│ XGBoost                 │
-│ Logistic Regression     │
-└─────────────────────────┘
-      │
-      ▼
-Equal-Weight Probability Ensemble
-      │
-      ├── Calibration Threshold
-      ├── Test Performance
-      ├── Conformal Prediction
-      ├── Uncertainty Quantification
-      ├── Fairness Auditing
-      ├── BMI Population Shift
-      └── Explainability
-      │
-      ▼
-Dataset-Level Predictions
-      │
-      ▼
-CSV Export
+Mother's height (cm)
+Mother's weight before pregnancy (kg)
 ```
 
----
+have been removed from the predictive feature set because the dataset's recorded pre-pregnancy BMI is mathematically consistent with those two quantities. Retaining BMI together with its component height and weight measurements would introduce redundant predictors without adding an independent measurement dimension.
 
-# 🔀 Train / Calibration / Test Design
+The model therefore retains **pre-pregnancy BMI alone**.
 
-Only observations with known GDM outcomes are used for supervised model development and evaluation.
-
-| Partition | Proportion | Purpose |
-|---|---:|---|
-| Training | 60% | Model fitting |
-| Calibration | 15% | Threshold and conformal calibration |
-| Test | 25% | Final performance evaluation |
-
-The split is stratified by GDM outcome.
-
-The test partition remains untouched for final predictive performance evaluation.
-
-> The test partition is not used to select the classification threshold.
-
----
-
-# 🧬 Predictor Selection and Leakage Control
-
-SafeTriage-GDM uses a deliberately restricted **antepartum predictor schema**.
-
-The approved predictors are:
+## Approved predictors
 
 ```text
 Evidence of maternal anaemia?
@@ -240,10 +106,6 @@ For how many weeks were multiple micronutrients taken?
 
 Mother's pre-pregnancy BMI (kg/m2)
 
-Mother's height (cm)
-
-Mother's weight before pregnancy (kg)
-
 Mother's age (years)
 
 Did the mother smoke during pregnancy?
@@ -253,9 +115,35 @@ Twin pregnancy?
 Parity
 ```
 
-## Variables deliberately excluded
+## Why BMI is retained instead of height + weight
 
-Variables representing information that is clearly available only after delivery are excluded from the predictive feature schema.
+BMI is represented as:
+
+```text
+BMI = pre-pregnancy weight / (height in metres)^2
+```
+
+For the supplied CBGS dataset, reconstruction from the recorded maternal height and pre-pregnancy weight produced essentially identical BMI values, with differences attributable to numerical precision/rounding.
+
+Therefore, the updated model uses:
+
+```text
+Pre-pregnancy BMI
+```
+
+rather than simultaneously using:
+
+```text
+Pre-pregnancy BMI + height + pre-pregnancy weight
+```
+
+This is a feature-engineering and redundancy decision. It should **not** be interpreted as evidence that the removed variables were measured after pregnancy.
+
+---
+
+# 🚫 Leakage Control
+
+The application deliberately excludes variables that are clearly post-delivery or strongly outcome-adjacent from the predictive feature schema.
 
 Examples include:
 
@@ -271,45 +159,100 @@ Examples include:
 - Small-for-gestational-age status
 - Baby sex
 
-Gestational hypertension and pre-eclampsia variables are also excluded from the baseline predictor schema because their availability depends on the clinical prediction time point.
+Gestational hypertension and pre-eclampsia variables are also excluded from the baseline predictor schema because their availability depends on the intended clinical prediction time point.
 
-This predictor design is intended to reduce obvious outcome leakage and make the modelling framework more consistent with an antepartum prediction setting.
+The objective is to create an antepartum-oriented research pipeline rather than allowing information generated at or after delivery to enter the predictive model.
 
 ---
 
-# ⚖️ Class Imbalance Strategy
+# 🧠 Model Architecture
 
-GDM-positive observations may be substantially less frequent than GDM-negative observations.
-
-SafeTriage-GDM uses a **training-only ROSE-style smoothed minority oversampling procedure**.
-
-The procedure:
-
-1. Separates minority and majority observations.
-2. Samples minority observations with replacement.
-3. Applies small Gaussian perturbations to numeric minority features.
-4. Samples categorical values from observed minority values.
-5. Generates additional minority observations until the training classes are approximately balanced.
-6. Shuffles the resulting training data.
-
-The ROSE-style procedure is applied **only to the training partition**.
+## Random Forest
 
 ```text
-Training
-    │
-    └── ROSE-style balancing
-            │
-            ▼
-       Model fitting
-
-Calibration
-    │
-    └── Natural distribution
-
-Test
-    │
-    └── Natural distribution
+n_estimators = 300
+min_samples_leaf = 3
+random_state = 42
+n_jobs = -1
 ```
+
+## XGBoost
+
+```text
+n_estimators = 300
+max_depth = 3
+learning_rate = 0.03
+subsample = 0.90
+colsample_bytree = 0.90
+objective = binary:logistic
+eval_metric = logloss
+random_state = 42
+n_jobs = -1
+```
+
+## Logistic Regression
+
+```text
+max_iter = 5000
+solver = lbfgs
+random_state = 42
+```
+
+## Equal-weight ensemble
+
+```text
+P_ensemble = (P_RF + P_XGB + P_LR) / 3
+```
+
+No single model receives a larger ensemble weight.
+
+---
+
+# 🔀 Train / Calibration / Test Design
+
+Only observations with known GDM outcomes are used for supervised model development and final evaluation.
+
+| Partition | Approx. proportion | Purpose |
+|---|---:|---|
+| Training | 60% | Model fitting |
+| Calibration | 15% | Threshold and conformal calibration |
+| Test | 25% | Final performance evaluation |
+
+The split is stratified by GDM outcome.
+
+The test partition remains untouched during model fitting, threshold selection, and calibration.
+
+The exact row counts can differ by one observation because stratified splitting operates on finite samples.
+
+---
+
+# ⚖️ Class-Imbalance Strategy
+
+SafeTriage-GDM uses a **training-only ROSE-style smoothed minority oversampling** procedure.
+
+The workflow is:
+
+```text
+Labeled observations
+        │
+        ▼
+Stratified split
+        │
+        ├───────────────┐
+        │               │
+     Training      Calibration/Test
+        │               │
+        ▼               │
+ROSE-style balancing   Natural distribution
+        │               │
+        ▼               │
+     Model fitting      │
+                        │
+                        ▼
+                 Final evaluation
+```
+
+The Python implementation is a **ROSE-style approximation**, not a claim of exact equivalence to the R `ROSE` package.
 
 The application does **not** use:
 
@@ -318,64 +261,83 @@ The application does **not** use:
 - SMOTETomek
 - Test-set oversampling
 - Calibration-set oversampling
+- Synthetic/random labels
 
-> The Python implementation is a ROSE-style approximation using smoothed minority resampling. It is not presented as an exact reimplementation of the R `ROSE` package.
+The test set therefore retains its natural class distribution.
 
 ---
 
 # 🧩 Missing Data and Preprocessing
 
-The application uses a MICE-style iterative imputation approach for numeric variables.
+## Numeric variables
 
-The numeric preprocessing workflow is:
+The application uses an iterative-imputation procedure designed as a MICE-style preprocessing approach:
 
 ```text
-Numeric Variables
-      │
-      ▼
-Iterative Imputation
-      │
-      ▼
+Numeric variables
+       │
+       ▼
+Iterative imputation
+       │
+       ▼
 Standardization
 ```
 
-Categorical variables use:
+Configuration includes:
 
 ```text
-Categorical Variables
-      │
-      ▼
-Most-Frequent Imputation
-      │
-      ▼
-One-Hot Encoding
+max_iter = 20
+initial_strategy = median
+random_state = 42
 ```
 
-Unknown categorical levels encountered during inference are handled using:
+## Categorical variables
+
+```text
+Categorical variables
+       │
+       ▼
+Most-frequent imputation
+       │
+       ▼
+One-hot encoding
+```
+
+Unknown categorical levels during inference are handled with:
 
 ```python
-handle_unknown="ignore"
+handle_unknown = "ignore"
 ```
 
-The preprocessing transformation is fitted on the training data and subsequently applied to calibration, test, and inference observations.
+Preprocessing is fitted on the training workflow and then applied to calibration, test, and inference observations.
 
 ---
 
-# 🛡️ Conformal Prediction
+# 🎯 Calibration-Derived Decision Threshold
 
-SafeTriage-GDM uses a dedicated calibration partition to construct a split-conformal prediction threshold.
+The classification threshold is selected using the dedicated calibration partition rather than the final test set.
 
-For each calibration observation, the nonconformity score is:
+The test set is therefore not used to choose a threshold that maximizes its performance.
+
+The threshold is selected using balanced accuracy on the calibration data.
+
+This is intended to avoid the pathological situation in which a fixed threshold such as `0.50` produces extremely low sensitivity in an imbalanced problem.
+
+> A calibration-derived threshold can improve the operating point for sensitivity/specificity trade-offs, but it does not guarantee better external performance.
+
+---
+
+# 🛡️ 90% Conformal Prediction
+
+SafeTriage-GDM constructs split-conformal prediction sets using the dedicated calibration partition.
+
+For each calibration observation:
 
 ```text
 S_i = 1 - P(Y_i | X_i)
 ```
 
-where:
-
-- `Y_i` is the observed GDM class.
-- `X_i` represents the predictor variables.
-- `P(Y_i | X_i)` is the ensemble probability assigned to the true class.
+where `P(Y_i | X_i)` is the ensemble probability assigned to the observed class.
 
 The application uses:
 
@@ -383,29 +345,33 @@ The application uses:
 90% conformal confidence
 ```
 
-The conformal threshold is estimated from the dedicated calibration partition.
+Possible prediction sets include:
 
-Population-shift monitoring does **not** dynamically modify the conformal threshold.
+```text
+{GDM}
+{No GDM}
+{GDM, No GDM}
+```
 
-> **Important:** Conformal prediction provides a statistical coverage framework under its underlying assumptions. It does not establish clinical safety, diagnostic validity, or medical reliability.
+`{GDM, No GDM}` means that both classes remain plausible under the conformal procedure. It is **not** a diagnosis and should not be interpreted as a clinical safety guarantee.
+
+The conformal calibration quantity is not dynamically modified by BMI PSI.
 
 ---
 
-# 🔬 Uncertainty Quantification
+# 🌫️ Uncertainty Quantification
 
-SafeTriage-GDM reports several uncertainty-related quantities.
+The application reports four research-oriented uncertainty quantities.
 
-## Model-Disagreement / Epistemic Uncertainty
+## Epistemic uncertainty
 
-The standard deviation of the three model probabilities is used as a model-disagreement proxy:
+Model disagreement is summarized using the standard deviation of the three model probabilities:
 
 ```text
-σ_models = SD(P_RF, P_XGB, P_LR)
+SD(P_RF, P_XGB, P_LR)
 ```
 
-A larger value indicates greater disagreement between the constituent models.
-
-## Aleatoric Entropy
+## Aleatoric uncertainty proxy
 
 Binary entropy is calculated for each model probability:
 
@@ -413,296 +379,113 @@ Binary entropy is calculated for each model probability:
 H(p) = -p log2(p) - (1-p) log2(1-p)
 ```
 
-The model-specific entropy values are averaged to produce an aleatoric-uncertainty proxy.
+and averaged across models.
 
-## Predictive Entropy
-
-Predictive entropy is calculated from the ensemble probability:
+## Predictive entropy
 
 ```text
 H_predictive = -p log2(p) - (1-p) log2(1-p)
 ```
 
-where `p` is the ensemble probability of GDM.
+where `p` is the ensemble probability.
 
-## Mutual Information
-
-The application estimates:
+## Mutual information proxy
 
 ```text
 MI = max(H_predictive - H_aleatoric, 0)
 ```
 
-These quantities are intended for research-oriented uncertainty analysis and should not be interpreted as direct measures of clinical certainty.
+These measures are model-based uncertainty proxies, not direct clinical certainty measures.
 
 ---
 
-# 📈 Predictive Performance Evaluation
+# 📈 Test-Set Performance Evaluation
 
-Final predictive performance is evaluated on the untouched test partition.
-
-The application reports:
+The final test partition is evaluated using:
 
 - ROC-AUC
 - PR-AUC
 - Accuracy
 - Balanced Accuracy
-- Sensitivity
+- Sensitivity / Recall
 - Specificity
 - Precision
-- F1 Score
-- Brier Score
-- Log Loss
+- F1-score
+- Brier score
+- Log loss
+- Confusion matrix
 
-## ROC-AUC
+The application also displays:
 
-ROC-AUC evaluates the ability of the model to rank positive observations above negative observations across classification thresholds.
+- Individual model performance
+- ROC curves
+- Precision-recall curves
+- Threshold-performance curves
+- Confusion matrix visualization
+- Ensemble probability distributions
 
-## PR-AUC
-
-PR-AUC summarizes the precision-recall relationship and is particularly informative when the positive class is relatively uncommon.
-
-## Accuracy
-
-```text
-Accuracy = (TP + TN) / (TP + TN + FP + FN)
-```
-
-## Balanced Accuracy
-
-```text
-Balanced Accuracy = (Sensitivity + Specificity) / 2
-```
-
-## Sensitivity
-
-```text
-Sensitivity = TP / (TP + FN)
-```
-
-## Specificity
-
-```text
-Specificity = TN / (TN + FP)
-```
-
-## Precision
-
-```text
-Precision = TP / (TP + FP)
-```
-
-## F1 Score
-
-```text
-F1 = 2 × (Precision × Recall) / (Precision + Recall)
-```
-
-## Brier Score
-
-```text
-Brier = (1/n) × Σ(p_i - y_i)²
-```
-
-Lower values indicate better probabilistic accuracy.
-
-## Log Loss
-
-```text
-LogLoss = -(1/n) × Σ[y_i log(p_i) + (1-y_i) log(1-p_i)]
-```
-
-Lower values indicate better probabilistic performance.
+Because GDM-positive cases can be relatively uncommon, PR-AUC, sensitivity, F1, and related metrics may have substantial sampling uncertainty.
 
 ---
 
-# 🎚️ Calibration-Derived Decision Threshold
+# ⚖️ Algorithmic Fairness Audit
 
-The application does not automatically use a fixed `0.50` threshold.
-
-Instead, the ensemble decision threshold is selected using the **calibration partition only**.
-
-Candidate thresholds are evaluated using balanced accuracy:
+The application evaluates maternal-age groups:
 
 ```text
-Balanced Accuracy
-=
-(Sensitivity + Specificity) / 2
+<25
+25–34
+35–44
+45+
 ```
 
-The threshold with the highest calibration balanced accuracy is selected.
+The audit reports:
 
-The test partition is not used for threshold selection.
+- Group size
+- Selection rate
+- False-positive rate
+
+The principal disparity measure is the range of observed group FPRs:
+
+```text
+FPR disparity = max(FPR_group) - min(FPR_group)
+```
+
+> This is an age-group fairness audit, not a complete Equalized Odds assessment. It does not establish fairness across every protected attribute or fairness criterion.
 
 ---
 
-# 📊 Model Performance Visualizations
+# 📊 BMI Population-Stability Monitoring
 
-The Streamlit application provides interactive visualizations for research analysis.
+BMI is monitored using Population Stability Index (PSI).
 
-These include:
+The predefined BMI bins are:
 
-### Model Performance Comparison
+```text
+<18.5
+18.5–24.9
+25.0–29.9
+30.0–39.9
+40+
+```
 
-Compares:
+The application compares the reference training BMI distribution with an external/current BMI distribution.
 
-- Accuracy
-- Balanced Accuracy
-- Sensitivity
-- Specificity
-- Precision
-- F1
+Interpretation used by the application:
 
-across:
+| PSI | Interpretation |
+|---:|---|
+| < 0.10 | Minimal shift |
+| 0.10–<0.20 | Moderate shift |
+| ≥ 0.20 | Substantial shift |
 
-- Random Forest
-- XGBoost
-- Logistic Regression
-
-### ROC Curves
-
-Interactive ROC curves are displayed for:
-
-- Random Forest
-- XGBoost
-- Logistic Regression
-- Equal-weight Ensemble
-
-### Precision-Recall Curves
-
-Interactive precision-recall curves are provided for all three individual models and the ensemble.
-
-### Threshold Analysis
-
-The application displays sensitivity, specificity, and balanced accuracy across candidate classification thresholds.
-
-### Confusion Matrix
-
-The final ensemble confusion matrix is displayed both as a table and as a visual chart.
-
-### Uncertainty Visualization
-
-The application displays distributions of:
-
-- Epistemic uncertainty
-- Aleatoric uncertainty
-- Predictive entropy
-- Mutual information
-
-### Fairness Visualization
-
-Age-group selection rates and false-positive rates are visualized.
-
-### BMI Distribution
-
-Training and uploaded BMI distributions are compared visually.
-
-### Feature Contribution
-
-The most influential predictive variables are displayed as interactive horizontal feature-importance bars.
+PSI is a monitoring statistic. It does not modify the trained model, decision threshold, or conformal calibration.
 
 ---
 
-# ⚖️ Fairness Auditing
+# 🔎 Explainability
 
-SafeTriage-GDM includes a dedicated fairness analysis across maternal age groups.
-
-The age groups are:
-
-| Age group |
-|---|
-| <25 |
-| 25–34 |
-| 35–44 |
-| 45+ |
-
-## Selection Rate
-
-```text
-Selection Rate_g
-=
-Number classified as elevated risk
-/
-Total observations in group g
-```
-
-The application reports the difference between the highest and lowest group-level selection rates.
-
-## False Positive Rate
-
-For observations with known GDM ground truth:
-
-```text
-FPR_g = FP_g / (FP_g + TN_g)
-```
-
-The application reports:
-
-```text
-FPR Disparity
-=
-Maximum group FPR
--
-Minimum group FPR
-```
-
-This is explicitly labelled **FPR disparity**.
-
-It is **not** described as Equalized Odds disparity because Equalized Odds requires assessment of both false-positive and true-positive rates.
-
----
-
-# 📉 Population Shift Monitoring
-
-SafeTriage-GDM monitors the distribution of maternal pre-pregnancy BMI using the Population Stability Index (PSI).
-
-BMI categories are:
-
-| Category | Range |
-|---|---|
-| Underweight | <18.5 |
-| Normal | 18.5–24.9 |
-| Overweight | 25.0–29.9 |
-| Obesity I | 30.0–39.9 |
-| Obesity II+ | ≥40 |
-
-PSI is calculated as:
-
-```text
-PSI = Σ(A_j - E_j) × ln(A_j / E_j)
-```
-
-where:
-
-- `A_j` is the current/uploaded proportion in category `j`.
-- `E_j` is the training/reference proportion in category `j`.
-
-The research monitoring threshold is:
-
-```text
-PSI = 0.20
-```
-
-Interpretation:
-
-```text
-PSI < 0.10
-    Minimal population shift
-
-0.10 ≤ PSI < 0.20
-    Moderate population shift
-
-PSI ≥ 0.20
-    Substantial population shift
-```
-
-A PSI warning does **not** automatically modify model predictions or the conformal threshold.
-
----
-
-# 🔎 Explainable AI
-
-SafeTriage-GDM provides global model-based feature contribution analysis.
+Feature contributions are aggregated back to the original predictor variables after one-hot encoding.
 
 The application uses:
 
@@ -710,108 +493,52 @@ The application uses:
 - XGBoost feature importance
 - Absolute Logistic Regression coefficients
 
-The contribution values are aggregated across the three models at the level of the original predictor variables.
+The model-level contributions are aggregated and summarized for comparison.
 
-The application displays the highest-ranked predictors as interactive feature-weight bars.
-
-> **Important:** Feature importance describes predictive model behaviour. It is not causal inference. A highly influential predictive variable does not necessarily mean that changing that variable will cause a change in GDM risk.
+> Feature importance describes predictive model behaviour. It does not establish causality.
 
 ---
 
-# 📁 Accepted Data Format
+# 🧪 Public Synthetic Demonstration Datasets
 
-The application accepts:
+The repository should contain **synthetic demonstration datasets only**.
 
-```text
-.xlsx
-.xls
-```
-
-The uploaded dataset should contain the target column:
+Recommended structure:
 
 ```text
-Gestational diabetes?
+safetriage-gdm-app/
+│
+├── app.py
+├── requirements.txt
+├── README.md
+├── .gitignore
+└── datasets/
+    ├── README.md
+    ├── SafeTriage_GDM_external_synthetic_test.xlsx
+    ├── SafeTriage_GDM_external_renamed_schema_test.xlsx
+    └── SafeTriage_GDM_fairness_psi_stress_test.xlsx
 ```
 
-and all required approved predictor variables.
+## 1. `SafeTriage_GDM_external_synthetic_test.xlsx`
 
-The application distinguishes between:
-
-```text
-All uploaded observations
-        │
-        ├── Known GDM outcome
-        │       │
-        │       └── Training / Calibration / Test
-        │
-        └── Missing GDM outcome
-                │
-                └── Inference population
-```
-
-Observations without a known GDM outcome can remain in the uploaded dataset for inference, while supervised performance evaluation uses only observations with known GDM outcomes.
-
----
-
-# 🔐 Privacy and Data Protection
-
-SafeTriage-GDM is intended for research datasets.
-
-**Do not upload directly identifiable patient information.**
-
-Do not upload:
-
-- Names
-- Medical record numbers
-- Addresses
-- Telephone numbers
-- Email addresses
-- National identification numbers
-- Other direct identifiers
-
-Users are responsible for ensuring that datasets uploaded to the application are appropriately de-identified and that their use complies with applicable ethical, institutional, and data-protection requirements.
-
-> For a public GitHub repository, do not commit private patient-level datasets unless you have explicit permission and the data are legally shareable.
-
----
-
-# 🧪 Public Demonstration Datasets
-
-The repository may include synthetic datasets created specifically for
-software demonstration, reproducibility testing, external-validation
-workflow testing, fairness auditing, population-stability monitoring, and
-schema-mapping demonstrations.
-
-These files are **synthetic** and are not the original Cambridge Baby Growth
-Study observations.
-
-## Recommended Public Datasets
-
-### 1. `SafeTriage_GDM_external_synthetic_test.xlsx`
-
-Main synthetic external-validation demonstration dataset.
-
-Characteristics:
+Synthetic canonical-schema demonstration dataset.
 
 - 1,100 rows
 - 1,000 observations with known GDM outcomes
 - 100 observations without a GDM outcome
-- 14 approved predictors
-- Designed for the application's external-validation workflow
-- Contains synthetic observations only
+- 12 approved predictors + target
+- Synthetic observations only
 
 Recommended uses:
 
-- External-validation demonstration
-- Labeled and unlabeled inference
+- External-validation workflow testing
+- Labeled/unlabeled inference
 - Dataset validation
-- Model evaluation workflow
+- Schema compatibility testing
 
-### 2. `SafeTriage_GDM_external_renamed_schema_test.xlsx`
+## 2. `SafeTriage_GDM_external_renamed_schema_test.xlsx`
 
-Synthetic external dataset using alternative, simplified variable names.
-
-Example schema:
+Synthetic dataset using alternative variable names:
 
 ```text
 maternal_anemia
@@ -822,8 +549,6 @@ mmn_stop
 only_mmn
 mmn_duration
 prepreg_bmi
-height_cm
-prepreg_weight
 maternal_age
 smoking
 twins
@@ -831,92 +556,61 @@ parity
 gdm_status
 ```
 
-Recommended uses:
+It contains the same 12 predictor concepts but uses simplified names to test the application's flexible schema-mapping workflow.
 
-- External dataset integration
-- Flexible predictor mapping
-- Target-column mapping
-- Schema compatibility testing
+## 3. `SafeTriage_GDM_fairness_psi_stress_test.xlsx`
 
-### 3. `SafeTriage_GDM_fairness_psi_stress_test.xlsx`
+Synthetic dataset designed to exercise:
 
-Synthetic dataset designed to exercise the fairness and population-stability
-components of SafeTriage-GDM.
-
-Characteristics:
-
-- 1,500 rows
-- 1,000 observations with known GDM outcomes
-- 500 observations without a GDM outcome
-- 14 approved predictors
-- Contains the canonical target column `Gestational diabetes?`
-
-Recommended uses:
-
-- Age-group fairness auditing
+- Age-group fairness analysis
 - Selection-rate analysis
 - False-positive-rate analysis
-- BMI population-stability monitoring
-- PSI stress testing
-- Labeled/unlabeled inference testing
+- BMI PSI monitoring
+- Labeled/unlabeled inference
 
-## 🚫 Original CBGS Research Dataset
+It contains 1,500 rows and the updated 12-predictor canonical schema plus the GDM target.
 
-The original Cambridge Baby Growth Study dataset used during the research
-work is **not included in this public repository**.
+## 🚫 Original CBGS Dataset
 
-The original dataset contains individual-level research observations and
-should only be accessed, processed, or shared in accordance with the
-applicable data-access permissions, ethical requirements, institutional
-policies, and/or dataset-provider conditions.
-
-Therefore:
+Do **not** upload the original:
 
 ```text
-Public GitHub Repository
-        │
-        ├── Application source code
-        ├── Documentation
-        └── Synthetic demonstration datasets
-                  │
-                  ▼
-             Safe for public
-             software testing
-
-Original CBGS data
-        │
-        ▼
-Not distributed through this repository
+dataCBGS_dataset.xlsx
 ```
 
-Users should **not** add `dataCBGS_dataset.xlsx` or other restricted
-individual-level datasets to the public repository unless they have explicit
-permission to redistribute the data.
+to a public GitHub repository unless you have explicit legal and ethical permission to redistribute it.
 
-## Synthetic-data disclaimer
+The public repository is intended to contain:
 
-The demonstration datasets are intended only for:
+```text
+Application code
+       +
+Documentation
+       +
+Synthetic demonstration data
+```
 
-- Software testing
-- Research-method demonstration
-- Reproducibility examples
-- Interface testing
-- External-validation workflow demonstration
-- Fairness and population-shift testing
+not the restricted individual-level research observations.
 
-They are **not clinical datasets**, are not evidence of model performance
-in a real-world population, and must not be used for medical decision-making.
+---
 
 # 🚀 Quick Start
 
-## 1. Clone the Repository
+## 1. Clone the repository
 
 ```bash
 git clone https://github.com/ikechukwukamalu8/safetriage-gdm-app.git
 cd safetriage-gdm-app
 ```
 
-## 2. Create a Virtual Environment
+## 2. Create a virtual environment
+
+### Windows PowerShell
+
+```powershell
+python -m venv venv
+venv\Scripts\activate
+```
 
 ### Linux / macOS
 
@@ -925,54 +619,44 @@ python -m venv venv
 source venv/bin/activate
 ```
 
-### Windows
-
-```powershell
-python -m venv venv
-venv\Scripts\activate
-```
-
-## 3. Install Dependencies
+## 3. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## 4. Run the Application
+## 4. Run locally
 
 ```bash
 streamlit run app.py
 ```
 
+Then open the local Streamlit URL shown in the terminal.
+
 ---
 
-# ☁️ Streamlit Cloud Deployment
+# ☁️ Streamlit Community Cloud
 
-SafeTriage-GDM can be deployed using Streamlit Community Cloud.
-
-### Deployment steps
-
-1. Push the repository to GitHub.
+1. Push `app.py`, `requirements.txt`, and `README.md` to GitHub.
 2. Open Streamlit Community Cloud.
-3. Select the GitHub repository.
+3. Select the repository.
 4. Set the main file to:
 
 ```text
 app.py
 ```
 
-5. Deploy the application.
-6. Ensure that `requirements.txt` is present in the repository.
+5. Deploy.
 
-The application does not require a pre-trained `.pkl` or `.joblib` model artifact.
+The application does not depend on a pre-trained `.pkl` or `.joblib` model file. Models are trained dynamically from the uploaded research dataset.
 
-Models are trained dynamically from the uploaded research dataset.
+For a public demonstration, use one of the synthetic datasets in `datasets/`.
 
 ---
 
-# 📦 Requirements
+# 📦 Recommended `requirements.txt`
 
-The main dependencies are:
+Use:
 
 ```text
 streamlit==1.65.0
@@ -985,7 +669,9 @@ xlrd>=2.0.1,<3
 plotly>=5.24,<7
 ```
 
-The current application uses Plotly for interactive visualization. Matplotlib and Altair are not required.
+Plotly is required because the current application uses interactive visualizations.
+
+Matplotlib and Altair are not required by the current application.
 
 ---
 
@@ -1006,113 +692,86 @@ safetriage-gdm-app/
     └── SafeTriage_GDM_fairness_psi_stress_test.xlsx
 ```
 
-The repository is designed to contain the application source code and
-synthetic demonstration datasets that can be used to reproduce and test
-the application's workflows without exposing restricted individual-level
-research data.
+---
 
-## `app.py`
+# 🔁 External Validation Workflow
 
-Main Streamlit application containing:
+The application supports an external-validation mode in which the uploaded external dataset is mapped to the SafeTriage-GDM schema.
 
-- Dataset validation
-- Predictor validation
-- Leakage-aware feature selection
-- Data splitting
-- ROSE-style training balancing
-- MICE-style imputation
-- Categorical encoding
-- Standardization
-- Random Forest
-- XGBoost
-- Logistic Regression
-- Equal-weight ensemble
-- Threshold selection
-- Conformal prediction
-- Uncertainty quantification
-- Test-set evaluation
-- ROC curves
-- Precision-recall curves
-- Threshold analysis
-- Confusion matrix
-- Fairness auditing
-- BMI PSI monitoring
-- Feature contribution analysis
-- Dataset-level inference
-- CSV export
+The application can work with alternative column names through the schema-mapping interface.
 
-## `requirements.txt`
+The external workflow reuses the reference model's fitted preprocessing/model objects and does not retrain the model on external unlabeled observations.
 
-Python dependency specification.
+The external analysis includes:
 
-## `README.md`
-
-Project documentation.
-
-## `datasets/`
-
-Contains synthetic demonstration datasets and a dataset-specific README
-describing their intended testing purposes.
-
-The datasets directory must not be used to distribute restricted
-individual-level research data.
+1. Predictor mapping
+2. Target mapping where available
+3. External probability prediction
+4. Frozen decision threshold
+5. Frozen conformal calibration reference
+6. Uncertainty analysis
+7. Fairness analysis
+8. BMI PSI monitoring
+9. Dataset-level prediction export
 
 ---
 
-# 🔬 Reproducibility
+# 🧪 Reproducibility
 
-The application uses a fixed random seed:
+The principal random seed is:
 
 ```python
 RANDOM_STATE = 42
 ```
 
-The model development procedure follows:
+The modelling design is deliberately deterministic where supported by the underlying libraries.
+
+The core development procedure is:
 
 ```text
-60% Training
-15% Calibration
-25% Testing
+Upload dataset
+     │
+     ▼
+Validate schema
+     │
+     ▼
+Select observations with known GDM outcomes
+     │
+     ▼
+60% Training ──► ROSE-style balancing ──► Model fitting
+     │
+     ├── 15% Calibration ──► threshold + conformal calibration
+     │
+     └── 25% Test ─────────► untouched final evaluation
 ```
 
-The calibration partition is used for:
+---
 
-- Decision-threshold selection
-- Conformal calibration
+# 🛡️ Methodological Safeguards
 
-The final test partition is reserved for performance evaluation.
+SafeTriage-GDM deliberately avoids several practices that could produce optimistic evaluation:
+
+- No synthetic/random labels
+- No test-set oversampling
+- No test-set threshold optimization
+- No test-set probability calibration
+- No class weighting
+- No `scale_pos_weight`
+- No SMOTETomek
+- No post-hoc sigmoid calibration
+- No baby-at-birth variables as predictors
+- No training on unlabeled external target observations
+- No dynamic modification of conformal `q` using BMI PSI
 
 ---
 
-# 🧪 Methodological Safeguards
-
-The application deliberately avoids several practices that can lead to optimistic or misleading evaluation.
-
-SafeTriage-GDM does **not** use:
-
-- Synthetic labels
-- Test-set oversampling
-- Test-set threshold optimization
-- Class weighting
-- `scale_pos_weight`
-- SMOTETomek
-- Post-hoc sigmoid calibration
-- Test-set probability calibration
-- Baby-at-birth variables as predictors
-- Dynamic modification of conformal `q` using BMI drift
-- Training of models on unlabeled target observations
-
-The test partition retains its natural class distribution.
-
----
-
-# 📋 Research Workflow Summary
+# 📋 End-to-End Research Workflow
 
 ```text
 1. Upload research dataset
              │
              ▼
-2. Validate target and predictors
+2. Validate target and 12 predictors
              │
              ▼
 3. Identify labeled observations
@@ -1121,8 +780,7 @@ The test partition retains its natural class distribution.
 4. Stratified 60/15/25 split
              │
              ▼
-5. ROSE-style balancing
-   └── Training only
+5. Training-only ROSE-style balancing
              │
              ▼
 6. MICE-style preprocessing
@@ -1137,11 +795,10 @@ The test partition retains its natural class distribution.
 8. Equal-weight ensemble
              │
              ▼
-9. Select threshold
-   └── Calibration only
+9. Calibration-derived threshold
              │
              ▼
-10. Evaluate untouched test set
+10. Untouched test-set evaluation
              │
              ├── ROC-AUC
              ├── PR-AUC
@@ -1156,7 +813,7 @@ The test partition retains its natural class distribution.
 11. 90% conformal prediction
              │
              ▼
-12. Uncertainty analysis
+12. Uncertainty quantification
              │
              ▼
 13. Fairness audit
@@ -1176,337 +833,107 @@ The test partition retains its natural class distribution.
 
 ---
 
+# 📊 Interpreting the Results
+
+The application should be interpreted as a research evaluation rather than a clinical validation study.
+
+A higher ROC-AUC indicates better ranking discrimination across thresholds.
+
+PR-AUC is particularly informative when the positive class is relatively uncommon.
+
+Sensitivity measures the proportion of true GDM cases identified as positive under the selected threshold.
+
+Specificity measures the proportion of true non-GDM cases identified as negative.
+
+Brier score and log loss evaluate probabilistic prediction quality.
+
+Balanced accuracy gives equal weight to sensitivity and specificity.
+
+No single metric is sufficient to establish clinical usefulness.
+
+---
+
 # ⚠️ Limitations
 
-SafeTriage-GDM is a research prototype and has important limitations.
+## Dataset limitations
 
-## Dataset Limitations
+Predictive performance depends on the quality, completeness, size, representativeness, and provenance of the uploaded dataset.
 
-Predictive performance depends strongly on the characteristics, quality, size, completeness, and representativeness of the supplied research dataset.
+## Class imbalance
 
-## Class Imbalance
+GDM-positive observations may be substantially fewer than GDM-negative observations. Training-only ROSE-style balancing addresses the training imbalance but does not guarantee improved generalization.
 
-GDM-positive observations may be substantially fewer than GDM-negative observations.
+## Small positive test sample
 
-Training-only ROSE-style balancing is used to address the modelling challenge, but balancing does not guarantee improved generalization.
+When the test set contains relatively few GDM-positive observations, sensitivity, F1, PR-AUC, and related estimates can be unstable.
 
-## Small Test-Set Uncertainty
+## External validity
 
-When the number of positive GDM cases is small, sensitivity, specificity, PR-AUC, F1, and related metrics can have substantial sampling variability.
+Performance on one cohort does not establish performance in another population, country, healthcare system, demographic group, or clinical setting.
 
-Point estimates should therefore be interpreted cautiously.
+## Prediction timing
 
-## External Validity
+Some variables may become available at different times during pregnancy. The current schema is intended as an antepartum-oriented research feature set, but real clinical deployment would require a precisely defined prediction time point and prospective validation.
 
-Performance on one dataset does not establish performance in other:
+## Fairness limitations
 
-- Populations
-- Healthcare systems
-- Countries
-- Demographic groups
-- Clinical settings
+The current audit focuses on maternal age groups, selection rates, and false-positive rates. It is not a complete fairness assessment and does not establish Equalized Odds or fairness across all protected characteristics.
 
-External validation is required before drawing conclusions about generalizability.
+## Conformal limitations
 
-## Prediction Timing
+Conformal prediction depends on assumptions such as exchangeability between calibration and future observations. Distribution shift can affect empirical coverage. A conformal prediction set is not a guarantee of clinical safety.
 
-Some pregnancy-related variables become available only at particular points during pregnancy.
+## Explainability limitations
 
-The predictor schema therefore deliberately excludes variables that are clearly post-delivery or strongly outcome-adjacent.
+Feature importance and model contribution measures describe predictive behaviour. They do not establish causal effects, treatment effects, or clinical mechanisms.
 
-## Fairness Limitations
+## Synthetic demonstration datasets
 
-The current fairness audit focuses on:
-
-- Maternal age groups
-- Selection rates
-- False-positive rates
-
-It is not a complete fairness evaluation.
-
-It does not establish Equalized Odds, calibration fairness, demographic parity, or fairness across every protected characteristic.
-
-## Conformal Prediction Limitations
-
-Conformal prediction relies on assumptions such as exchangeability between calibration and future observations.
-
-Violation of these assumptions can affect empirical coverage.
-
-Conformal prediction should not be interpreted as a guarantee of clinical safety.
-
-## Explainability Limitations
-
-Feature importance and model contribution measures describe predictive model behaviour.
-
-They do not establish:
-
-- Causality
-- Biological mechanisms
-- Clinical effectiveness
-- Treatment effects
-
-## Clinical Validity
-
-SafeTriage-GDM has not been established as a clinically validated diagnostic or triage instrument.
-
-It should therefore be used only as a research and educational prototype.
+The public synthetic datasets are for software and methodological demonstration only. Their results must not be presented as evidence of performance on a real-world clinical population.
 
 ---
 
-# 🧪 Research Interpretation
+# 📜 Research Status
 
-SafeTriage-GDM should be interpreted as an experimental framework for studying the interaction between:
+**Status:** Research Prototype
 
-```text
-Predictive Modelling
-        +
-Uncertainty Quantification
-        +
-Conformal Methods
-        +
-Algorithmic Fairness
-        +
-Population Shift Monitoring
-        +
-Explainable AI
-        +
-Leakage-Aware Modelling
-```
+**Primary application:** Responsible and uncertainty-aware machine-learning research for GDM risk modelling.
 
-The system is intended to support methodological research rather than replace clinical expertise.
+**Not approved for clinical use.**
 
 ---
 
-# 🔭 Potential Research Extensions
-
-Possible future research directions include:
-
-- External validation on independent cohorts
-- Prospective evaluation
-- Temporal validation
-- Geographic validation
-- Calibration analysis
-- Confidence intervals for performance metrics
-- Bootstrap uncertainty estimates
-- Decision-curve analysis
-- Subgroup calibration
-- Additional protected-group fairness analysis
-- Fairness-aware model optimization
-- Counterfactual fairness analysis
-- Causal modelling
-- Conformal risk-control methods
-- Distribution-free uncertainty evaluation
-- Advanced drift detection
-- Federated learning
-- Privacy-preserving machine learning
-- Prospective clinical workflow evaluation
-
-These extensions are research directions and are not currently implemented in the application.
-
----
-
-# 📊 Interpreting Model Performance
-
-A higher ROC-AUC does not necessarily mean that the model is clinically useful.
-
-In an imbalanced GDM prediction setting, multiple dimensions of performance should be considered together:
-
-```text
-Discrimination
-    │
-    ├── ROC-AUC
-    └── PR-AUC
-
-Classification
-    │
-    ├── Sensitivity
-    ├── Specificity
-    ├── Precision
-    └── F1
-
-Probabilistic Quality
-    │
-    ├── Brier Score
-    └── Log Loss
-
-Uncertainty
-    │
-    ├── Epistemic
-    ├── Aleatoric
-    ├── Predictive Entropy
-    └── Mutual Information
-
-Reliability / Robustness
-    │
-    ├── Conformal Coverage
-    ├── Fairness
-    └── Population Stability
-```
-
-No single metric should be interpreted in isolation.
-
----
-
-# 🧭 Responsible AI Considerations
-
-SafeTriage-GDM is designed around several responsible machine-learning principles:
-
-### Transparency
-
-The modelling architecture and evaluation metrics are explicitly documented.
-
-### Leakage Control
-
-Post-delivery variables are excluded from the antepartum predictor schema.
-
-### Test Isolation
-
-The final test partition is not used for model fitting or threshold selection.
-
-### Uncertainty Awareness
-
-The system reports several uncertainty-related quantities rather than presenting predictions without context.
-
-### Fairness Monitoring
-
-Performance-related disparities are examined across maternal age groups.
-
-### Population Monitoring
-
-BMI population stability is monitored to identify potential distributional changes.
-
-### Explainability
-
-Feature contribution information is presented to support model inspection.
-
-### Privacy
-
-Users are instructed not to upload directly identifiable patient information.
-
----
-
-# 📜 Disclaimer
-
-**SafeTriage-GDM is a research prototype.**
-
-It is not:
-
-- A medical device
-- A diagnostic system
-- A treatment recommendation system
-- A clinical decision-making system
-- A replacement for a healthcare professional
-
-Predictions, probabilities, uncertainty estimates, conformal prediction sets, fairness metrics, population-shift statistics, and explanations should not be used as a substitute for assessment by qualified healthcare professionals.
-
-The system has not been clinically validated, externally validated, prospectively evaluated, or approved for clinical use.
-
----
-
-# 👨‍💻 Author
+# 👤 Author
 
 **Ikechukwu Okechi Kamalu**
 
 Research interests include:
 
 - Responsible AI
-- Trustworthy Machine Learning
+- Trustworthy AI
 - Explainable AI
-- Fairness-Aware Machine Learning
-- Causal Inference
-- Uncertainty Quantification
-- Computational Health
+- Fairness-aware machine learning
+- Causal inference
+- Interpretable machine learning
 - Biostatistics
-- Psychometric Modelling
-- Scientific Machine Learning
-- Human-Centered AI
-- Knowledge-Grounded Machine Learning
-- Information Retrieval
-- Natural Language Processing
+- Computational health
+- Uncertainty quantification
+- Clinical decision-support research
 
 ---
 
-# 🌐 Project Links
+# 📄 License and Data Notice
 
-**Live Application:**  
-https://safetriage-gdm-app-3v5zd7afo2bxevoifgfjmw.streamlit.app/
+Choose an appropriate software license for the source code before publishing the repository.
 
-**GitHub Repository:**  
-https://github.com/ikechukwukamalu8/safetriage-gdm-app
+Do not assume that a software license automatically grants redistribution rights for third-party research datasets.
 
----
-
-# 📄 Citation
-
-If this prototype contributes to your research, please cite the associated project or repository.
-
-```text
-Kamalu, I. O.
-SafeTriage-GDM: Uncertainty-Quantified Clinical Triage System
-for Gestational Diabetes Mellitus Risk with Algorithmic Fairness
-Auditing and Conformal Safety Bounds.
-GitHub repository.
-```
+The synthetic datasets included with this project are demonstration data and should be clearly labelled as synthetic.
 
 ---
 
-# 🔒 Public Repository Data Policy
+# ⚠️ Final Disclaimer
 
-For the public GitHub repository:
+SafeTriage-GDM is a research prototype. It is intended to demonstrate an uncertainty-aware, leakage-conscious, fairness-audited machine-learning workflow for GDM risk research.
 
-- Commit source code and documentation.
-- Commit only synthetic demonstration datasets intended for public release.
-- Do not commit the original CBGS individual-level research dataset.
-- Do not commit identifiable patient information.
-- Do not commit API keys, passwords, access tokens, or Streamlit secrets.
-- Do not commit private research files merely because they are required for
-  local reproduction.
-
-The public synthetic datasets are intended to make the application
-demonstrable without redistributing restricted research data.
-
----
-
-# 📜 License
-
-This project is provided for research and educational purposes.
-
-Please review the repository license before using, modifying, or redistributing the software or associated datasets.
-
----
-
-## ⭐ Project Summary
-
-SafeTriage-GDM integrates:
-
-```text
-Leakage-Aware Predictors
-          +
-MICE-Style Imputation
-          +
-Training-Only ROSE-Style Balancing
-          +
-Random Forest
-          +
-XGBoost
-          +
-Logistic Regression
-          +
-Equal-Weight Ensemble
-          +
-Calibration-Derived Threshold
-          +
-90% Conformal Prediction
-          +
-Uncertainty Quantification
-          +
-Fairness Auditing
-          +
-BMI Population Stability
-          +
-Explainable AI
-          +
-Interactive Research Dashboard
-```
-
-**SafeTriage-GDM is intended as a transparent, uncertainty-aware, and fairness-conscious research framework for studying machine-learning approaches to GDM risk prediction.**
+It is **not** a medical device and must not be used as a substitute for professional diagnosis, treatment, or clinical decision-making.

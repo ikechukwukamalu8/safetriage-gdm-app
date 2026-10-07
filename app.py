@@ -323,6 +323,10 @@ PSI_THRESHOLD = 0.20
 
 BMI_COLUMN = "Mother's pre-pregnancy BMI (kg/m2)"
 
+# Height and pre-pregnancy weight are intentionally excluded because the
+# recorded pre-pregnancy BMI is mathematically derived from those quantities.
+# Retaining BMI alone avoids redundant predictors and unnecessary collinearity.
+
 # --------------------------------------------------------------------------
 # Leakage-aware antepartum predictor schema.
 #
@@ -339,8 +343,6 @@ APPROVED_PREDICTORS = [
     "Did the mothers just supplement with multiple micronutrients during pregnancy and nothing else?",
     "For how many weeks were multiple micronutrients taken?",
     "Mother's pre-pregnancy BMI (kg/m2)",
-    "Mother's height (cm)",
-    "Mother's weight before pregnancy (kg)",
     "Mother's age (years)",
     "Did the mother smoke during pregnancy?",
     "Twin pregnancy?",
@@ -1672,8 +1674,6 @@ PREDICTOR_LABELS = {
     "Did the mothers just supplement with multiple micronutrients during pregnancy and nothing else?": "Only micronutrient supplementation",
     "For how many weeks were multiple micronutrients taken?": "Micronutrient duration (weeks)",
     "Mother's pre-pregnancy BMI (kg/m2)": "Pre-pregnancy BMI",
-    "Mother's height (cm)": "Maternal height",
-    "Mother's weight before pregnancy (kg)": "Pre-pregnancy weight",
     "Mother's age (years)": "Maternal age",
     "Did the mother smoke during pregnancy?": "Smoking during pregnancy",
     "Twin pregnancy?": "Twin pregnancy",
@@ -1689,8 +1689,6 @@ COLUMN_ALIASES = {
     "Did the mothers just supplement with multiple micronutrients during pregnancy and nothing else?": ["only micronutrient supplementation", "only mmn", "micronutrients only"],
     "For how many weeks were multiple micronutrients taken?": ["micronutrient duration weeks", "mmn duration", "supplementation duration", "weeks of supplementation"],
     "Mother's pre-pregnancy BMI (kg/m2)": ["pre pregnancy bmi", "prepregnancy bmi", "prepreg bmi", "pre pregnancy body mass index", "bmi"],
-    "Mother's height (cm)": ["maternal height", "mother height", "height cm", "height"],
-    "Mother's weight before pregnancy (kg)": ["pre pregnancy weight", "prepregnancy weight", "prepreg weight", "maternal pre pregnancy weight", "weight before pregnancy"],
     "Mother's age (years)": ["maternal age", "mother age", "age years", "age"],
     "Did the mother smoke during pregnancy?": ["smoking during pregnancy", "maternal smoking", "smoked during pregnancy", "smoking"],
     "Twin pregnancy?": ["twin pregnancy", "twins", "multiple pregnancy"],
