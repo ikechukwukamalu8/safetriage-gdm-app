@@ -3196,6 +3196,17 @@ st.dataframe(
     hide_index=True,
 )
 
+# Research interpretation: report the frozen-test result without overstating
+# discrimination or clinical performance.
+st.info(
+    "**Test-set interpretation:** The model demonstrates modest discrimination "
+    f"(ROC-AUC {test_metrics['ROC-AUC']:.3f}). At the prespecified "
+    f"calibration-derived threshold of {threshold:.3f}, sensitivity was "
+    f"{test_metrics['Sensitivity']:.1%} and specificity was "
+    f"{test_metrics['Specificity']:.1%} on the untouched test set. "
+    "These results are exploratory and do not establish clinical diagnostic performance."
+)
+
 
 # ==============================================================================
 # MODEL-LEVEL PERFORMANCE
@@ -3483,7 +3494,27 @@ else:
         hide_index=True,
     )
 
-    valid_fpr = fairness[
+    # Very small subgroups can produce unstable fairness estimates. We retain
+    # their raw counts/rates for transparency but exclude groups below the
+    # prespecified minimum from the headline FPR disparity.
+    FAIRNESS_MIN_GROUP_N = 10
+    small_groups = fairness.loc[
+        fairness["N"] < FAIRNESS_MIN_GROUP_N,
+        "Age group",
+    ].tolist()
+
+    if small_groups:
+        st.warning(
+            "Age groups with fewer than "
+            f"{FAIRNESS_MIN_GROUP_N} observations are not suitable for reliable "
+            "subgroup fairness conclusions. The affected group(s) are retained "
+            "in the table for transparency but excluded from the headline FPR disparity."
+        )
+
+    eligible_fairness = fairness.loc[
+        fairness["N"] >= FAIRNESS_MIN_GROUP_N
+    ]
+    valid_fpr = eligible_fairness[
         "False-positive rate"
     ].dropna()
 
@@ -3495,13 +3526,20 @@ else:
         )
 
         st.metric(
-            "Age-group FPR disparity",
+            "Age-group FPR disparity (eligible groups)",
             f"{fpr_disparity:.3f}",
+        )
+    else:
+        st.info(
+            "There are fewer than two age groups with sufficient sample size "
+            "for a reliable FPR disparity estimate."
         )
 
     st.caption(
         "This audit reports age-group selection rates and false-positive "
-        "rates. It is not a complete Equalized Odds assessment."
+        "rates. It is not a complete Equalized Odds assessment. "
+        f"Groups with N < {FAIRNESS_MIN_GROUP_N} are treated as insufficient "
+        "for reliable subgroup conclusions."
     )
 
     render_fairness_chart(fairness)
