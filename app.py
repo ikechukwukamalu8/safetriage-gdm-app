@@ -2468,6 +2468,60 @@ No SMOTETomek is used.
 
 The ensemble is:
 
-```text
-P(GDM) =
-[P_RF(GDM) + P_XGB(GDM) + P_LR(GDM)] / 3
+`P(GDM) = [P_RF(GDM) + P_XGB(GDM) + P_LR(GDM)] / 3`
+
+**Threshold**
+
+The decision threshold is selected from the calibration partition using
+balanced accuracy. The test partition is not used to choose the threshold.
+
+**Conformal prediction**
+
+A separate calibration partition is used to construct 90% conformal
+prediction sets.
+
+**Uncertainty**
+
+The application reports:
+
+- epistemic uncertainty;
+- aleatoric uncertainty;
+- predictive entropy;
+- mutual information.
+
+**Fairness**
+
+Age-group selection rates and false-positive-rate disparities are monitored.
+
+**Distribution shift**
+
+Maternal pre-pregnancy BMI is monitored using Population Stability Index
+(PSI).
+
+**Explainability**
+
+Model-based feature importance is aggregated across the three models.
+
+These explainability results describe predictive model behavior and should
+not be interpreted as causal effects.
+"""
+)
+
+
+# ==============================================================================
+# FINAL DISCLAIMER
+# ==============================================================================
+
+st.divider()
+
+st.caption(
+    "SafeTriage-GDM is a research prototype. It has not been clinically "
+    "validated, externally validated, prospectively evaluated, or approved "
+    "as a medical device. Model predictions, uncertainty estimates, "
+    "conformal prediction sets, fairness metrics, and drift statistics "
+    "should be interpreted only within the research context."
+)
+
+st.caption(
+    "Author: Ikechukwu Okechi Kamalu"
+)
