@@ -323,10 +323,6 @@ PSI_THRESHOLD = 0.20
 
 BMI_COLUMN = "Mother's pre-pregnancy BMI (kg/m2)"
 
-# Height and pre-pregnancy weight are intentionally excluded because the
-# recorded pre-pregnancy BMI is mathematically derived from those quantities.
-# Retaining BMI alone avoids redundant predictors and unnecessary collinearity.
-
 # --------------------------------------------------------------------------
 # Leakage-aware antepartum predictor schema.
 #
@@ -336,7 +332,6 @@ BMI_COLUMN = "Mother's pre-pregnancy BMI (kg/m2)"
 
 APPROVED_PREDICTORS = [
     "Evidence of maternal anaemia?",
-    "Do we have data related to multiple micronutrient supplementation?",
     "Did the mother supplement with multiple micronutrients during pregnancy?",
     "Relative to the start of pregnancy, when did multiple micronutrient supplementation start?",
     "Relative to the start of pregnancy, when did multiple micronutrient supplementation stop?",
@@ -345,7 +340,6 @@ APPROVED_PREDICTORS = [
     "Mother's pre-pregnancy BMI (kg/m2)",
     "Mother's age (years)",
     "Did the mother smoke during pregnancy?",
-    "Twin pregnancy?",
     "Parity",
 ]
 
@@ -1667,7 +1661,6 @@ def aggregate_feature_importance(
 
 PREDICTOR_LABELS = {
     "Evidence of maternal anaemia?": "Maternal anaemia",
-    "Do we have data related to multiple micronutrient supplementation?": "Micronutrient data available",
     "Did the mother supplement with multiple micronutrients during pregnancy?": "Micronutrient supplementation",
     "Relative to the start of pregnancy, when did multiple micronutrient supplementation start?": "Supplementation start timing",
     "Relative to the start of pregnancy, when did multiple micronutrient supplementation stop?": "Supplementation stop timing",
@@ -1676,13 +1669,11 @@ PREDICTOR_LABELS = {
     "Mother's pre-pregnancy BMI (kg/m2)": "Pre-pregnancy BMI",
     "Mother's age (years)": "Maternal age",
     "Did the mother smoke during pregnancy?": "Smoking during pregnancy",
-    "Twin pregnancy?": "Twin pregnancy",
     "Parity": "Parity",
 }
 
 COLUMN_ALIASES = {
     "Evidence of maternal anaemia?": ["maternal anaemia", "maternal anemia", "anaemia", "anemia"],
-    "Do we have data related to multiple micronutrient supplementation?": ["micronutrient data available", "multiple micronutrient data", "mmn data", "mmn data available"],
     "Did the mother supplement with multiple micronutrients during pregnancy?": ["micronutrient supplementation", "multiple micronutrient supplementation", "mmn supplementation"],
     "Relative to the start of pregnancy, when did multiple micronutrient supplementation start?": ["supplementation start timing", "mmn start", "supplementation start"],
     "Relative to the start of pregnancy, when did multiple micronutrient supplementation stop?": ["supplementation stop timing", "mmn stop", "supplementation stop"],
@@ -1691,7 +1682,6 @@ COLUMN_ALIASES = {
     "Mother's pre-pregnancy BMI (kg/m2)": ["pre pregnancy bmi", "prepregnancy bmi", "prepreg bmi", "pre pregnancy body mass index", "bmi"],
     "Mother's age (years)": ["maternal age", "mother age", "age years", "age"],
     "Did the mother smoke during pregnancy?": ["smoking during pregnancy", "maternal smoking", "smoked during pregnancy", "smoking"],
-    "Twin pregnancy?": ["twin pregnancy", "twins", "multiple pregnancy"],
     "Parity": ["parity", "number of previous births", "birth order"],
 }
 
