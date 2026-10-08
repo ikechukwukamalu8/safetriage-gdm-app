@@ -590,10 +590,14 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
 def normalize_binary_target(series: pd.Series) -> pd.Series:
     """
-    Convert the GDM target to:
-        0 = No
-        1 = Yes
+    Convert common binary GDM outcome encodings to:
+        0 = No GDM
+        1 = GDM
         NaN = unavailable/unknown
+
+    Supports numeric 0/1 values as well as common text encodings.
+    Numeric handling is performed before string conversion so Excel values
+    such as 0.0 and 1.0 are recognized correctly.
     """
 
     result = pd.Series(
@@ -607,14 +611,32 @@ def normalize_binary_target(series: pd.Series) -> pd.Series:
         if pd.isna(value):
             continue
 
+        # Handle numeric Excel encodings directly.
+        numeric_value = pd.to_numeric(
+            pd.Series([value]),
+            errors="coerce",
+        ).iloc[0]
+
+        if pd.notna(numeric_value):
+            if np.isclose(float(numeric_value), 1.0):
+                result.loc[idx] = 1.0
+                continue
+
+            if np.isclose(float(numeric_value), 0.0):
+                result.loc[idx] = 0.0
+                continue
+
+        # Handle textual encodings.
         text = str(value).strip().lower()
 
         if text in {
             "yes",
             "y",
             "1",
+            "1.0",
             "true",
             "positive",
+            "gdm",
         }:
             result.loc[idx] = 1.0
 
@@ -622,8 +644,10 @@ def normalize_binary_target(series: pd.Series) -> pd.Series:
             "no",
             "n",
             "0",
+            "0.0",
             "false",
             "negative",
+            "no gdm",
         }:
             result.loc[idx] = 0.0
 
@@ -2781,6 +2805,14 @@ if missing_predictors:
 
 target = normalize_binary_target(
     df[TARGET_COLUMN]
+)
+
+# Report the recognized binary outcome distribution before class validation.
+recognized_target_counts = target.dropna().value_counts().sort_index()
+st.caption(
+    "Recognized GDM outcomes: "
+    f"No GDM = {int(recognized_target_counts.get(0.0, 0)):,}; "
+    f"GDM = {int(recognized_target_counts.get(1.0, 0)):,}."
 )
 
 labeled_mask = target.notna()
