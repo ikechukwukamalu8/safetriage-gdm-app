@@ -2995,7 +2995,7 @@ if TUNING_ENABLED:
         "test data are not used for tuning."
     )
 
-    with st.spinner("Tuning Random Forest, XGBoost, and Logistic Regression on the training partition..."):
+    with st.spinner("Tuning Random Forest, XGBoost, and Logistic Regression on the training partition. This may take a moment because the app performs 5-fold cross-validation and evaluates multiple candidate hyperparameter configurations. Calibration and test data remain untouched during tuning..."):
         try:
             tuned_model_params, tuning_table = tune_models_on_training_data(X_train, y_train)
         except Exception as exc:
