@@ -22,6 +22,28 @@ The researcher selects the intended configuration in the application sidebar. Th
 > **Important:** SafeTriage-GDM is a research prototype. It is not a medical device, diagnostic system, treatment recommendation system, or substitute for professional clinical decision-making. The system has not been clinically validated or approved for clinical use.
 
 ---
+## Research Contribution
+
+SafeTriage-GDM is designed as a GDM-specific responsible-AI framework rather than solely as a predictive model. Its contribution is the integration of:
+
+- uncertainty-aware prediction using conformal prediction sets;
+- algorithmic fairness auditing across maternal age groups;
+- population-shift monitoring using the Population Stability Index (PSI);
+- probability calibration and decision-threshold analysis;
+- model-based explainability;
+- development-weighted ensemble modelling; and
+- a leakage-conscious workflow separating model development, calibration,
+  final testing, and independent external validation.
+
+The framework is intended to demonstrate how predictive performance can be
+evaluated together with uncertainty, fairness, explainability, and
+population stability rather than relying on discrimination metrics alone.
+
+The contribution is methodological and framework-oriented. SafeTriage-GDM
+does not claim to introduce a new machine-learning algorithm, nor does it
+claim to be the first GDM prediction system to use any individual component.
+Independent clinical external validation remains necessary before any
+clinical-use claims can be made.
 
 ## Research Dataset: Cambridge Baby Growth Study (CBGS)
 
@@ -584,9 +606,8 @@ If this prototype contributes to your research, please cite the associated proje
 
 ```text
 Kamalu, I. O.
-SafeTriage-GDM: Uncertainty-Quantified Clinical Triage System
-for Gestational Diabetes Mellitus Risk with Algorithmic Fairness
-Auditing and Conformal Safety Bounds.
+SafeTriage-GDM: An Uncertainty-Quantified GDM Risk Triage Framework
+with Algorithmic Fairness Auditing and Conformal Prediction.
 GitHub repository.
 ```
 
