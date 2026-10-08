@@ -305,7 +305,7 @@ def render_probability_distribution(y_true, probability, title="Test-set GDM Pro
 APP_TITLE = "SafeTriage-GDM"
 
 APP_SUBTITLE = (
-    "Uncertainty-Quantified"
+    "Uncertainty-Quantified "
     "Gestational Diabetes Mellitus (GDM) Risk Triage Framework with "
     "Algorithmic Fairness Auditing & Conformal Prediction"
 )
