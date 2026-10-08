@@ -7,7 +7,7 @@
 
 [![Launch App](https://img.shields.io/badge/Launch-SafeTriage--GDM%20App-brightgreen?logo=streamlit)](https://safetriage-gdm-app-3v5zd7afo2bxevoifgfjmw.streamlit.app/)
 
-### 🚀 Live Application
+## 🚀 Live Application
 
 **Try the SafeTriage-GDM research prototype:**  
 https://safetriage-gdm-app-3v5zd7afo2bxevoifgfjmw.streamlit.app/
@@ -19,7 +19,7 @@ It supports **two explicitly selectable prediction configurations**:
 - **3-predictor configuration:** maternal age + pre-pregnancy BMI + parity
 - **4-predictor configuration:** maternal age + pre-pregnancy BMI + parity + **Maternal Multiple Micronutrient Supplementation (MMS) started by week 28**
 
-The researcher selects the intended configuration in the application sidebar. The model is **not inferred from the presence of extra columns**. This is important when a dataset contains MMS information but the researcher intentionally wants to evaluate the 3-predictor specification. Extra columns are ignored unless they belong to the selected configuration.
+The researcher selects the intended configuration in the application sidebar. The model is **not inferred from the presence of extra columns**. Extra columns are ignored unless they belong to the selected configuration.
 
 > **Important:** SafeTriage-GDM is a research prototype. It is not a medical device, diagnostic system, treatment recommendation system, or substitute for professional clinical decision-making. The system has not been clinically validated or approved for clinical use.
 
@@ -31,9 +31,33 @@ The research work underlying this prototype uses data from the **Cambridge Baby 
 
 Participants were recruited during pregnancy, with recruitment occurring around 12 weeks of gestation. Gestational diabetes mellitus was assessed using a 75-g oral glucose tolerance test at approximately 28 weeks of gestation.
 
-The original individual-level CBGS research dataset is **not distributed in this public repository**.
+The repository includes a copy of the CBGS research dataset used for the model-development workflow:
 
-### What does MMS mean?
+```text
+datasets/dataCBGS_dataset.xlsx
+```
+
+This is **third-party research data**, not data created by the author of SafeTriage-GDM. The dataset was originally deposited through the University of Cambridge repository. Users should consult the original repository for the authoritative dataset, metadata, provenance, and licensing information.
+
+**Original Cambridge repository:**  
+https://www.repository.cam.ac.uk/items/ca23c466-948b-4981-a415-c74c6ef139dc
+
+**DOI:** 10.17863/CAM.54014
+
+The Cambridge repository identifies the dataset as available under **CC BY 4.0, except where otherwise noted**. Users who reuse or redistribute the dataset should comply with the original repository's licence and attribution requirements.
+
+### CBGS dataset used by this project
+
+The working Excel file included in this repository contains:
+
+- **970 observations**
+- **34 columns**
+
+The CBGS file is included here for reproducible research and software demonstration. It remains third-party research data and should be attributed to its original source.
+
+---
+
+## What does MMS mean?
 
 **MMS** means **Multiple Micronutrient Supplementation**.
 
@@ -77,7 +101,7 @@ Select this configuration when the dataset contains usable MMS-start information
 | Parity | Parity/history of previous births represented in the source dataset |
 | MMS started by week 28 | Whether Multiple Micronutrient Supplementation started on or before week 28 |
 
-The two configurations are separate model specifications. The application does not insert an MMS value into a 3-predictor model or remove MMS from a 4-predictor model after fitting.
+The two configurations are separate model specifications.
 
 ### Temporal design
 
@@ -124,7 +148,7 @@ Ambiguous or unavailable timing is treated as missing rather than guessed.
 3. Upload a labelled research dataset containing the GDM outcome and the predictors required by the selected configuration.
 4. Review the column mapping and run the model-development pipeline.
 
-For the original CBGS research dataset, the presence of MMS columns does **not** force 4-predictor mode. You can explicitly select the 3-predictor model and the additional MMS columns will be ignored.
+For the CBGS research dataset, the presence of MMS columns does **not** force 4-predictor mode. You can explicitly select the 3-predictor model and the additional MMS columns will be ignored.
 
 ### External Validation
 
@@ -135,6 +159,8 @@ For the original CBGS research dataset, the presence of MMS columns does **not**
 5. The reference model is frozen before predictions are generated for the external dataset; the external dataset is not used for retraining or recalibration.
 
 A synthetic dataset in this repository may be used to **test the software workflow**, but synthetic data do not constitute clinical external validation.
+
+---
 
 ## Methodological Pipeline
 
@@ -176,7 +202,7 @@ The application uses three complementary model families:
 2. XGBoost
 3. Logistic Regression
 
-Their predicted probabilities are combined using a development-data-weighted ensemble. The model family is the same across the two predictor configurations, while the feature set is determined by the researcher-selected configuration.
+Their predicted probabilities are combined using a development-data-weighted ensemble.
 
 ### 6. Development-only tuning
 
@@ -194,7 +220,7 @@ The resulting weights are frozen before calibration and test evaluation.
 
 The decision threshold is selected using the calibration partition only. The research prototype maximizes **F2**, giving greater weight to sensitivity, subject to a prespecified **minimum specificity of 60%**.
 
-This is a methodological research constraint, not a clinical recommendation. The final test partition is never used to choose the threshold.
+This is a methodological research constraint, not a clinical recommendation.
 
 ### 9. Conformal prediction
 
@@ -210,7 +236,7 @@ A `{GDM, No GDM}` set indicates that both classes remain plausible at the specif
 
 ### 10. Uncertainty quantification
 
-The application reports model/predictive uncertainty measures including:
+The application reports:
 
 - epistemic uncertainty from model-probability dispersion;
 - aleatoric uncertainty using Bernoulli entropy;
@@ -258,11 +284,28 @@ These are predictive/model-based explanations and **are not causal effects**.
 
 ---
 
-## Public Synthetic Demonstration Datasets
+## Public Datasets for Software Testing and Demonstration
 
 The repository contains synthetic datasets for software testing and demonstration. They are **not the original Cambridge Baby Growth Study observations**, are not patient records, and do not establish clinical validity.
 
-### 3-predictor test datasets
+### CBGS research dataset
+
+#### `dataCBGS_dataset.xlsx`
+
+This is the third-party CBGS research dataset used for the primary model-development workflow.
+
+Use it to test:
+
+- the 3-predictor configuration;
+- the 4-predictor configuration;
+- model development;
+- uncertainty quantification;
+- conformal prediction;
+- fairness auditing;
+- BMI population-stability monitoring; and
+- model-based explainability.
+
+### 3-predictor synthetic test datasets
 
 #### `SafeTriage_GDM_external_synthetic_test.xlsx`
 
@@ -283,7 +326,7 @@ Uses `parity_count` instead of `parity` to test schema recognition/mapping.
 
 Contains intentionally shifted synthetic age/BMI distributions for testing population-stability and fairness-monitoring workflows.
 
-### 4-predictor test datasets
+### 4-predictor synthetic test datasets
 
 #### `SafeTriage_GDM_4predictor_synthetic_test.xlsx`
 
@@ -305,11 +348,129 @@ All synthetic outcomes and predictor relationships are artificial and must not b
 
 ---
 
+## Recommended Dataset Testing Sequence
+
+### Test 1 — CBGS 3-predictor development
+
+```text
+Dataset: dataCBGS_dataset.xlsx
+Mode: 3-predictor
+```
+
+### Test 2 — CBGS 4-predictor development
+
+```text
+Dataset: dataCBGS_dataset.xlsx
+Mode: 4-predictor
+```
+
+Compare the two configurations.
+
+### Test 3 — Raw MMS processing
+
+```text
+Dataset: SafeTriage_GDM_4predictor_raw_MMS_start_test.xlsx
+Mode: 4-predictor
+```
+
+Confirm that raw MMS start-week information can be transformed into the week-28 indicator.
+
+### Test 4 — Four-predictor synthetic workflow
+
+```text
+Dataset: SafeTriage_GDM_4predictor_synthetic_test.xlsx
+Mode: 4-predictor
+```
+
+Confirm that the complete 4-predictor software pipeline runs correctly.
+
+### Test 5 — Synthetic external-validation workflow
+
+Reference/development dataset:
+
+```text
+dataCBGS_dataset.xlsx
+```
+
+External dataset:
+
+```text
+SafeTriage_GDM_external_synthetic_test.xlsx
+```
+
+Configuration:
+
+```text
+3-predictor
+```
+
+This tests the external-validation software workflow. It is **not clinical external validation**.
+
+### Test 6 — Renamed-schema workflow
+
+Reference/development dataset:
+
+```text
+dataCBGS_dataset.xlsx
+```
+
+External dataset:
+
+```text
+SafeTriage_GDM_external_renamed_schema_test.xlsx
+```
+
+Configuration:
+
+```text
+3-predictor
+```
+
+This tests schema recognition/mapping.
+
+### Test 7 — Fairness and population-shift stress test
+
+```text
+Dataset: SafeTriage_GDM_fairness_psi_stress_test.xlsx
+Mode: 3-predictor
+```
+
+Inspect fairness metrics and PSI/population-shift outputs.
+
+---
+
+## Important Distinction: Development, Software Testing, and External Validation
+
+This project separates three types of evidence:
+
+### 1. Model-development evidence
+
+The CBGS dataset is used for the primary research/model-development workflow.
+
+### 2. Software-testing evidence
+
+The synthetic datasets are used to demonstrate and stress-test:
+
+- predictor handling;
+- MMS processing;
+- schema recognition;
+- external-validation workflow;
+- fairness auditing; and
+- population-stability monitoring.
+
+Synthetic results should not be presented as clinical validation.
+
+### 3. Genuine external-validation evidence
+
+A genuine external validation study requires an **independent real-world clinical cohort** that was not used for model training, hyperparameter tuning, threshold selection, conformal calibration, or feature-selection decisions.
+
+---
+
 ## Privacy
 
 Do not upload names, medical record numbers, addresses, or other directly identifiable patient information.
 
-The original individual-level CBGS dataset should remain private and should **not** be committed to a public GitHub repository.
+The CBGS dataset included in this repository is third-party research data obtained from the publicly deposited Cambridge University repository. It should not be modified or redistributed independently of the licence and attribution requirements specified by the original source.
 
 ---
 
@@ -339,6 +500,7 @@ safetriage-gdm-app/
 ├── .gitignore
 └── datasets/
     ├── README.md
+    ├── dataCBGS_dataset.xlsx
     ├── SafeTriage_GDM_external_synthetic_test.xlsx
     ├── SafeTriage_GDM_external_renamed_schema_test.xlsx
     ├── SafeTriage_GDM_fairness_psi_stress_test.xlsx
@@ -355,3 +517,5 @@ SafeTriage-GDM is a research prototype intended for methodological experimentati
 It has **not** been established as a clinically validated prediction model and must not be used to diagnose GDM, determine treatment, or make clinical decisions about an individual.
 
 All predictions should be interpreted as research outputs requiring independent scientific and clinical validation.
+
+The inclusion of the CBGS dataset in this repository does not imply endorsement of SafeTriage-GDM by the University of Cambridge, the Cambridge Baby Growth Study investigators, or any associated clinical institution.
