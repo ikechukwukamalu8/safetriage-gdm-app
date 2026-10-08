@@ -1,6 +1,6 @@
 # ==============================================================================
 # SafeTriage-GDM
-# SafeTriage-GDM: An Uncertainty-Quantified
+# SafeTriage-GDM: An Uncertainty-Quantified 
 # Gestational Diabetes Mellitus (GDM) Risk Triage Framework with 
 # Algorithmic Fairness Auditing & Conformal Prediction
 #
