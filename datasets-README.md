@@ -101,7 +101,9 @@ Use the synthetic datasets to test the application without relying on an additio
 
 ### External Validation
 
-For genuine external validation, use an independent real-world dataset that was not used to train or tune the reference model.
+One labelled dataset is sufficient for **Build & Evaluate Model**. The **External Validation** workflow requires two datasets: a reference/development dataset used to develop and freeze the reference model, and a separate independent external dataset used for evaluation.
+
+For genuine external validation, use an independent real-world clinical dataset that was not used for model training, preprocessing fitting, hyperparameter tuning, ensemble-weight selection, decision-threshold selection, or conformal calibration of the reference model.
 
 The synthetic datasets can be uploaded to **test the external-validation software workflow**, but their resulting performance metrics must **not** be described as clinical external validation.
 
