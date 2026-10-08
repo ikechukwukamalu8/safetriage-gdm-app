@@ -1,7 +1,6 @@
 # ==============================================================================
 # SafeTriage-GDM
-# Uncertainty-Quantified Clinical Triage System for Gestational Diabetes
-# Mellitus (GDM) Risk with Algorithmic Fairness Auditing & Conformal Safety Bounds
+# SafeTriage-GDM: An Uncertainty-Quantified Gestational Diabetes Mellitus (GDM) Risk Triage Framework with Algorithmic Fairness Auditing & Conformal Prediction
 #
 # Research Prototype — NOT a medical device
 #
