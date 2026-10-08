@@ -1,28 +1,25 @@
 # SafeTriage-GDM
 
-**Uncertainty-Quantified Clinical Triage System for Gestational Diabetes Mellitus (GDM) Risk with Algorithmic Fairness Auditing & Conformal Safety Bounds**
-
-[![Launch App](https://img.shields.io/badge/Launch-SafeTriage--GDM%20App-brightgreen?logo=streamlit)](https://safetriage-gdm-app-3v5zd7afo2bxevoifgfjmw.streamlit.app/)
-
-## 🚀 Live Application
-
-**Try the SafeTriage-GDM research prototype:**  
-https://safetriage-gdm-app-3v5zd7afo2bxevoifgfjmw.streamlit.app/
-
-
 ## Uncertainty-Quantified Clinical Triage System for Gestational Diabetes Mellitus (GDM) Risk with Algorithmic Fairness Auditing & Conformal Safety Bounds
 
 **Version:** Research Prototype  
 **Author:** Ikechukwu Okechi Kamalu
 
+[![Launch App](https://img.shields.io/badge/Launch-SafeTriage--GDM%20App-brightgreen?logo=streamlit)](https://safetriage-gdm-app-3v5zd7afo2bxevoifgfjmw.streamlit.app/)
+
+### 🚀 Live Application
+
+**Try the SafeTriage-GDM research prototype:**  
+https://safetriage-gdm-app-3v5zd7afo2bxevoifgfjmw.streamlit.app/
+
 SafeTriage-GDM is a research prototype for uncertainty-aware GDM risk triage, conformal prediction, algorithmic fairness auditing, population-stability monitoring, and model-based explainability.
 
-It supports **two automatically detected prediction configurations**:
+It supports **two explicitly selectable prediction configurations**:
 
 - **3-predictor configuration:** maternal age + pre-pregnancy BMI + parity
 - **4-predictor configuration:** maternal age + pre-pregnancy BMI + parity + **Maternal Multiple Micronutrient Supplementation (MMS) started by week 28**
 
-The application detects the available predictor configuration from the uploaded dataset. If valid MMS-start information is present, the 4-predictor specification is used. If it is absent, the 3-predictor specification is used.
+The researcher selects the intended configuration in the application sidebar. The model is **not inferred from the presence of extra columns**. This is important when a dataset contains MMS information but the researcher intentionally wants to evaluate the 3-predictor specification. Extra columns are ignored unless they belong to the selected configuration.
 
 > **Important:** SafeTriage-GDM is a research prototype. It is not a medical device, diagnostic system, treatment recommendation system, or substitute for professional clinical decision-making. The system has not been clinically validated or approved for clinical use.
 
@@ -61,7 +58,7 @@ The application does **not** use MMS stop timing, total MMS duration, or whole-p
 
 ### 3-predictor configuration
 
-Used automatically when no usable MMS-start variable is available.
+Select this configuration when you want the model to use only maternal age, pre-pregnancy BMI, and parity. Any MMS columns present in the uploaded dataset are ignored.
 
 | Predictor | Description |
 |---|---|
@@ -71,7 +68,7 @@ Used automatically when no usable MMS-start variable is available.
 
 ### 4-predictor configuration
 
-Used automatically when a usable MMS-start variable is present.
+Select this configuration when the dataset contains usable MMS-start information. The application requires the fourth predictor and will not silently substitute a 3-predictor model.
 
 | Predictor | Description |
 |---|---|
@@ -118,11 +115,32 @@ Ambiguous or unavailable timing is treated as missing rather than guessed.
 
 ---
 
+## How to use the application
+
+### Build & Evaluate Model
+
+1. Select **Build & Evaluate Model**.
+2. Choose either the **3-predictor** or **4-predictor** configuration in the sidebar.
+3. Upload a labelled research dataset containing the GDM outcome and the predictors required by the selected configuration.
+4. Review the column mapping and run the model-development pipeline.
+
+For the original CBGS research dataset, the presence of MMS columns does **not** force 4-predictor mode. You can explicitly select the 3-predictor model and the additional MMS columns will be ignored.
+
+### External Validation
+
+1. Select **External Validation**.
+2. Choose the predictor configuration that corresponds to the reference model you want to evaluate.
+3. Upload the reference/development dataset used to fit the model.
+4. Upload a separate independent external dataset containing the same required predictor concepts.
+5. The reference model is frozen before predictions are generated for the external dataset; the external dataset is not used for retraining or recalibration.
+
+A synthetic dataset in this repository may be used to **test the software workflow**, but synthetic data do not constitute clinical external validation.
+
 ## Methodological Pipeline
 
 ### 1. Data validation
 
-The application validates the uploaded Excel dataset, identifies the GDM outcome, and automatically determines whether the 3-predictor or 4-predictor configuration can be used.
+The application validates the uploaded Excel dataset, identifies the GDM outcome, and checks whether the selected 3-predictor or 4-predictor configuration can be supported by the uploaded columns.
 
 ### 2. Leakage-aware split
 
@@ -158,7 +176,7 @@ The application uses three complementary model families:
 2. XGBoost
 3. Logistic Regression
 
-Their predicted probabilities are combined using a development-data-weighted ensemble. The model family is the same across the two predictor configurations, while the feature set is determined automatically from the uploaded data.
+Their predicted probabilities are combined using a development-data-weighted ensemble. The model family is the same across the two predictor configurations, while the feature set is determined by the researcher-selected configuration.
 
 ### 6. Development-only tuning
 
@@ -277,7 +295,7 @@ MMS_started_by_28_weeks
 gdm_status
 ```
 
-This file is designed to trigger the **4-predictor configuration** automatically.
+This file is designed to test the explicitly selected **4-predictor configuration**.
 
 #### `SafeTriage_GDM_4predictor_raw_MMS_start_test.xlsx`
 

@@ -478,12 +478,11 @@ with st.sidebar:
 
     st.header("Pipeline")
     st.info(
-        "The app automatically selects a 3-predictor or 4-predictor configuration. "
-        "The base predictors are maternal age, pre-pregnancy BMI, and parity. "
-        "If valid Maternal Multiple Micronutrient Supplementation (MMS) start "
-        "information is present, the app also uses whether MMS started by week 28. "
-        "Whole-pregnancy MMS exposure, MMS stop, duration, delivery outcomes, and "
-        "newborn measurements are not used as predictors."
+        "The predictor configuration is selected explicitly above. The 3-predictor "
+        "model uses maternal age, pre-pregnancy BMI, and parity. The 4-predictor "
+        "model additionally uses whether Maternal Multiple Micronutrient Supplementation "
+        "(MMS) started by week 28. Whole-pregnancy MMS exposure, MMS stop, duration, "
+        "delivery outcomes, and newborn measurements are not used as predictors."
     )
 
     st.markdown(
@@ -532,6 +531,28 @@ with st.sidebar:
             "External Validation",
         ],
         index=0,
+    )
+
+    st.divider()
+
+    predictor_configuration = st.radio(
+        "Predictor configuration",
+        [
+            "3-predictor model",
+            "4-predictor model",
+        ],
+        index=0,
+        help=(
+            "Choose the model specification explicitly. The 3-predictor model uses "
+            "maternal age, pre-pregnancy BMI, and parity. The 4-predictor model adds "
+            "Maternal Multiple Micronutrient Supplementation (MMS) started by week 28. "
+            "Extra MMS columns are ignored in 3-predictor mode."
+        ),
+    )
+
+    st.caption(
+        "3-predictor: age + pre-pregnancy BMI + parity.  "
+        "4-predictor: age + pre-pregnancy BMI + parity + MMS started by week 28."
     )
 
 
@@ -2148,9 +2169,18 @@ def run_external_validation_mode():
         f"{reference_raw.shape[1]:,} columns**"
     )
 
-    reference_has_mms = (MMS_PREDICTOR in reference_raw.columns and reference_raw[MMS_PREDICTOR].notna().any())
-    APPROVED_PREDICTORS = BASE_PREDICTORS + ([MMS_PREDICTOR] if reference_has_mms else [])
-    MODEL_CONFIGURATION = "4-predictor" if reference_has_mms else "3-predictor"
+    # The researcher explicitly chooses the reference-model specification in the sidebar.
+    # Extra MMS information in a 3-predictor reference dataset is intentionally ignored.
+    APPROVED_PREDICTORS = (
+        BASE_PREDICTORS + [MMS_PREDICTOR]
+        if predictor_configuration == "4-predictor model"
+        else BASE_PREDICTORS.copy()
+    )
+    MODEL_CONFIGURATION = (
+        "4-predictor"
+        if predictor_configuration == "4-predictor model"
+        else "3-predictor"
+    )
 
     reference_mapping, reference_target_source = schema_mapping_ui(
         reference_raw,
@@ -2203,15 +2233,6 @@ def run_external_validation_mode():
         f"External dataset: **{external_raw.shape[0]:,} rows × "
         f"{external_raw.shape[1]:,} columns**"
     )
-
-    if MODEL_CONFIGURATION == "4-predictor" and not (MMS_PREDICTOR in external_raw.columns and external_raw[MMS_PREDICTOR].notna().any()):
-        st.error(
-            "The reference dataset uses the 4-predictor configuration, but the external "
-            "dataset does not contain usable Maternal Multiple Micronutrient Supplementation "
-            "(MMS) start information. Provide the MMS-start field or develop a separate "
-            "3-predictor reference model."
-        )
-        st.stop()
 
     external_mapping, external_target_source = schema_mapping_ui(
         external_raw,
@@ -2574,7 +2595,7 @@ def run_external_validation_mode():
 # ==============================================================================
 
 def auto_canonicalize_prediction_inputs(df: pd.DataFrame) -> pd.DataFrame:
-    """Map common uploaded predictor names to the canonical SafeTriage schema."""
+    """Map common uploaded names to the explicitly selected predictor schema."""
     global APPROVED_PREDICTORS, MODEL_CONFIGURATION
     normalized = {normalized_column_name(c): c for c in df.columns}
 
@@ -2589,19 +2610,26 @@ def auto_canonicalize_prediction_inputs(df: pd.DataFrame) -> pd.DataFrame:
     if not all(v is not None for v in base_mapping.values()):
         return df
 
-    mms_source = find_alias(MMS_PREDICTOR)
-    if mms_source is not None and df[mms_source].notna().any():
+    if predictor_configuration == "4-predictor model":
         APPROVED_PREDICTORS = BASE_PREDICTORS + [MMS_PREDICTOR]
         MODEL_CONFIGURATION = "4-predictor"
     else:
         APPROVED_PREDICTORS = BASE_PREDICTORS.copy()
         MODEL_CONFIGURATION = "3-predictor"
 
-    target_aliases = [TARGET_COLUMN, "gdm", "gdm status", "gdm outcome", "gestational diabetes", "gestational diabetes mellitus"]
-    target_source = next((normalized.get(normalized_column_name(a)) for a in target_aliases if normalized.get(normalized_column_name(a)) is not None), None)
     predictor_mapping = dict(base_mapping)
     if MODEL_CONFIGURATION == "4-predictor":
-        predictor_mapping[MMS_PREDICTOR] = mms_source
+        mms_source = find_alias(MMS_PREDICTOR)
+        if mms_source is not None:
+            predictor_mapping[MMS_PREDICTOR] = mms_source
+
+    # Do not silently invent a missing fourth predictor. The validation section
+    # below will stop with a clear mapping error when 4-predictor mode is selected.
+    if MODEL_CONFIGURATION == "4-predictor" and MMS_PREDICTOR not in predictor_mapping:
+        return df
+
+    target_aliases = [TARGET_COLUMN, "gdm", "gdm status", "gdm outcome", "gestational diabetes", "gestational diabetes mellitus"]
+    target_source = next((normalized.get(normalized_column_name(a)) for a in target_aliases if normalized.get(normalized_column_name(a)) is not None), None)
     return apply_schema_mapping(df, predictor_mapping, target_source or "")
 
 
@@ -2629,13 +2657,13 @@ if uploaded_file is None:
         """
         ### Getting started
 
-        Upload an Excel dataset containing the GDM target and the base antepartum
-        predictors. The app automatically detects whether usable Maternal Multiple
-        Micronutrient Supplementation (MMS) start information is available and
-        selects the 3-predictor or 4-predictor configuration.
+        Upload an Excel dataset containing the GDM target and the predictors required
+        by the **selected predictor configuration** in the sidebar. The model
+        configuration is selected explicitly rather than inferred from extra columns.
 
-        The 4-predictor configuration uses **MMS started by week 28**, derived from
-        the raw MMS start week when necessary.
+        The 4-predictor configuration uses **Maternal Multiple Micronutrient
+        Supplementation (MMS) started by week 28**, derived from raw MMS start week
+        information when necessary.
 
         The application will then:
 
@@ -2697,14 +2725,18 @@ except Exception as exc:
 
 st.subheader("1. Dataset validation")
 
-# Automatically select the model specification. A usable MMS-start field
-# activates the 4-predictor configuration; otherwise the 3-predictor model is used.
-if MMS_PREDICTOR in df.columns and df[MMS_PREDICTOR].notna().any():
-    APPROVED_PREDICTORS = BASE_PREDICTORS + [MMS_PREDICTOR]
-    MODEL_CONFIGURATION = "4-predictor"
-else:
-    APPROVED_PREDICTORS = BASE_PREDICTORS.copy()
-    MODEL_CONFIGURATION = "3-predictor"
+# Apply the explicitly selected model specification. Extra columns are allowed
+# and are ignored unless they are part of the selected predictor configuration.
+APPROVED_PREDICTORS = (
+    BASE_PREDICTORS + [MMS_PREDICTOR]
+    if predictor_configuration == "4-predictor model"
+    else BASE_PREDICTORS.copy()
+)
+MODEL_CONFIGURATION = (
+    "4-predictor"
+    if predictor_configuration == "4-predictor model"
+    else "3-predictor"
+)
 
 col1, col2, col3, col4 = st.columns(4)
 with col1:
@@ -2718,23 +2750,29 @@ with col4:
 
 if MODEL_CONFIGURATION == "4-predictor":
     st.success(
-        "4-predictor configuration detected: maternal age + pre-pregnancy BMI + parity + "
+        "4-predictor model selected: maternal age + pre-pregnancy BMI + parity + "
         "Maternal Multiple Micronutrient Supplementation (MMS) started by week 28."
     )
 else:
     st.info(
-        "3-predictor configuration detected: maternal age + pre-pregnancy BMI + parity. "
-        "No usable MMS-start field was detected, so the MMS predictor is not required."
+        "3-predictor model selected: maternal age + pre-pregnancy BMI + parity. "
+        "Any MMS columns in the uploaded dataset will be ignored for this model."
     )
 
 if TARGET_COLUMN not in df.columns:
     st.error(f"Required target column `{TARGET_COLUMN}` was not found.")
     st.stop()
 
-missing_predictors = [c for c in BASE_PREDICTORS if c not in df.columns]
+missing_predictors = [c for c in APPROVED_PREDICTORS if c not in df.columns]
 if missing_predictors:
-    st.error("Required base predictor columns are missing:")
-    st.write(missing_predictors)
+    st.error("The selected predictor configuration cannot be used because required predictor information is missing.")
+    st.write("Missing predictors:", [PREDICTOR_LABELS[c] for c in missing_predictors])
+    if MODEL_CONFIGURATION == "4-predictor":
+        st.info(
+            "For the 4-predictor model, provide a usable Maternal Multiple Micronutrient "
+            "Supplementation (MMS) start field or switch the sidebar selection to the "
+            "3-predictor model."
+        )
     st.stop()
 
 # ==============================================================================
