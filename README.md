@@ -34,7 +34,7 @@ Participants were recruited during pregnancy, with recruitment occurring around 
 The repository includes a copy of the CBGS research dataset used for the model-development workflow:
 
 ```text
-datasets/dataCBGS_dataset.xlsx
+dataCBGS_dataset.xlsx
 ```
 
 This is **third-party research data**, not data created by the author of SafeTriage-GDM. The dataset was originally deposited through the University of Cambridge repository. Users should consult the original repository for the authoritative dataset, metadata, provenance, and licensing information.
