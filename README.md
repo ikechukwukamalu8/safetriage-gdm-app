@@ -34,7 +34,7 @@ Participants were recruited during pregnancy, with recruitment occurring around 
 The repository includes a copy of the CBGS research dataset used for the model-development workflow:
 
 ```text
-dataCBGS_dataset.xlsx
+datasets/dataCBGS_dataset.xlsx
 ```
 
 This is **third-party research data**, not data created by the author of SafeTriage-GDM. The dataset was originally deposited through the University of Cambridge repository. Users should consult the original repository for the authoritative dataset, metadata, provenance, and licensing information.
@@ -150,13 +150,38 @@ Ambiguous or unavailable timing is treated as missing rather than guessed.
 
 For the CBGS research dataset, the presence of MMS columns does **not** force 4-predictor mode. You can explicitly select the 3-predictor model and the additional MMS columns will be ignored.
 
+> **One dataset is sufficient for Build & Evaluate Model.** You do not need two datasets unless you specifically want to use the External Validation workflow.
+
 ### External Validation
 
 1. Select **External Validation**.
 2. Choose the predictor configuration that corresponds to the reference model you want to evaluate.
-3. Upload the reference/development dataset used to fit the model.
-4. Upload a separate independent external dataset containing the same required predictor concepts.
-5. The reference model is frozen before predictions are generated for the external dataset; the external dataset is not used for retraining or recalibration.
+3. Upload the **reference/development dataset** used to develop the reference model.
+4. Upload a **separate independent external dataset** containing the same required predictor concepts.
+5. The reference model is developed and then frozen before predictions are generated for the external dataset.
+6. The external dataset is not used for retraining, rebalancing, threshold optimization, or conformal recalibration.
+
+### What the two external-validation datasets mean
+
+The **reference/development dataset** is used to develop and freeze the reference model, including preprocessing, model tuning, ensemble weighting, decision-threshold selection, and conformal calibration.
+
+The **external dataset** is then passed through that frozen workflow without retraining, rebalancing, threshold optimization, or conformal recalibration.
+
+Therefore:
+
+```text
+Reference dataset
+        ↓
+Model development + calibration
+        ↓
+Frozen reference model
+        ↓
+Independent external dataset
+        ↓
+External evaluation
+```
+
+For **outcome-based external performance evaluation**, the external dataset should contain an observed GDM outcome with both classes represented. If the external GDM outcome is unavailable, the application can still generate predictions and uncertainty/conformal outputs, but outcome-based performance metrics cannot be calculated.
 
 A synthetic dataset in this repository may be used to **test the software workflow**, but synthetic data do not constitute clinical external validation.
 
@@ -316,7 +341,7 @@ parity
 gdm_status
 ```
 
-Contains labeled and unlabeled synthetic observations for testing external-validation workflows.
+Contains labelled and unlabelled synthetic observations for testing external-validation workflows.
 
 #### `SafeTriage_GDM_external_renamed_schema_test.xlsx`
 
@@ -519,3 +544,72 @@ It has **not** been established as a clinically validated prediction model and m
 All predictions should be interpreted as research outputs requiring independent scientific and clinical validation.
 
 The inclusion of the CBGS dataset in this repository does not imply endorsement of SafeTriage-GDM by the University of Cambridge, the Cambridge Baby Growth Study investigators, or any associated clinical institution.
+
+---
+
+## 👨‍💻 Author
+
+**Ikechukwu Okechi Kamalu**
+
+Research interests include:
+
+- Responsible AI
+- Trustworthy Machine Learning
+- Explainable AI
+- Fairness-Aware Machine Learning
+- Causal Inference
+- Uncertainty Quantification
+- Computational Health
+- Biostatistics
+- Psychometric Modelling
+- Scientific Machine Learning
+- Human-Centered AI
+- Knowledge-Grounded Machine Learning
+- Information Retrieval
+- Natural Language Processing
+
+---
+
+## 🌐 Project Links
+
+**Live Application:**  
+https://safetriage-gdm-app-3v5zd7afo2bxevoifgfjmw.streamlit.app/
+
+**GitHub Repository:**  
+https://github.com/ikechukwukamalu8/safetriage-gdm-app
+
+---
+
+## 📄 Citation
+
+If this prototype contributes to your research, please cite the associated project or repository.
+
+```text
+Kamalu, I. O.
+SafeTriage-GDM: Uncertainty-Quantified Clinical Triage System
+for Gestational Diabetes Mellitus Risk with Algorithmic Fairness
+Auditing and Conformal Safety Bounds.
+GitHub repository.
+```
+
+---
+
+## 🔒 Public Repository Data Policy
+
+For the public GitHub repository:
+
+- Commit source code and documentation.
+- Commit only synthetic demonstration datasets intended for public release.
+- Do not commit identifiable patient information.
+- Do not commit API keys, passwords, access tokens, or Streamlit secrets.
+- Do not commit private research files merely because they are required for local reproduction.
+
+The public synthetic datasets are intended to make the application demonstrable without redistributing restricted research data.
+
+---
+
+## 📜 License
+
+This project is provided for research and educational purposes.
+
+Please review the repository license before using, modifying, or redistributing the software or associated datasets.
