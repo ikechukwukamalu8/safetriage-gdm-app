@@ -1,5 +1,15 @@
 # SafeTriage-GDM
 
+**Uncertainty-Quantified Clinical Triage System for Gestational Diabetes Mellitus (GDM) Risk with Algorithmic Fairness Auditing & Conformal Safety Bounds**
+
+[![Launch App](https://img.shields.io/badge/Launch-SafeTriage--GDM%20App-brightgreen?logo=streamlit)](https://safetriage-gdm-app-3v5zd7afo2bxevoifgfjmw.streamlit.app/)
+
+## 🚀 Live Application
+
+**Try the SafeTriage-GDM research prototype:**  
+https://safetriage-gdm-app-3v5zd7afo2bxevoifgfjmw.streamlit.app/
+
+
 ## Uncertainty-Quantified Clinical Triage System for Gestational Diabetes Mellitus (GDM) Risk with Algorithmic Fairness Auditing & Conformal Safety Bounds
 
 **Version:** Research Prototype  
