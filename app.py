@@ -334,11 +334,14 @@ BMI_COLUMN = "Mother's pre-pregnancy BMI (kg/m2)"
 # Strict 28-week landmark predictor schema.
 # Only predictors that are defensible as known by the GDM assessment
 # landmark are accepted by the application.
-APPROVED_PREDICTORS = [
+BASE_PREDICTORS = [
     "Mother's age (years)",
     "Mother's pre-pregnancy BMI (kg/m2)",
     "Parity",
 ]
+MMS_PREDICTOR = "MMS started by 28 weeks"
+APPROVED_PREDICTORS = BASE_PREDICTORS.copy()
+MODEL_CONFIGURATION = "3-predictor"
 
 EXPECTED_MODEL_ORDER = [
     "Random Forest",
@@ -475,10 +478,12 @@ with st.sidebar:
 
     st.header("Pipeline")
     st.info(
-        "Locked predictors: maternal age, pre-pregnancy BMI, and parity. "
-        "MMS timing and whole-pregnancy MMS exposure, MMS stop, "
-        "whole-pregnancy duration, final pregnancy outcomes, and newborn "
-        "measurements are not used as predictors."
+        "The app automatically selects a 3-predictor or 4-predictor configuration. "
+        "The base predictors are maternal age, pre-pregnancy BMI, and parity. "
+        "If valid Maternal Multiple Micronutrient Supplementation (MMS) start "
+        "information is present, the app also uses whether MMS started by week 28. "
+        "Whole-pregnancy MMS exposure, MMS stop, duration, delivery outcomes, and "
+        "newborn measurements are not used as predictors."
     )
 
     st.markdown(
@@ -1864,6 +1869,8 @@ COLUMN_ALIASES = {
         "supplementation start by 28 weeks",
         "mms start by 28 weeks",
         "mmn start by 28 weeks",
+        "maternal multiple micronutrient supplementation started by week 28",
+        "multiple micronutrient supplementation started by week 28",
         # Raw CBGS start-week field is accepted only so the app can derive
         # the landmark-safe binary feature.
         "relative to the start of pregnancy when did multiple micronutrient supplementation start",
@@ -2105,6 +2112,7 @@ def align_external_feature_types(
 
 def run_external_validation_mode():
     """Develop a reference model once and evaluate it on an independent dataset."""
+    global APPROVED_PREDICTORS, MODEL_CONFIGURATION
 
     st.subheader("External Validation")
     st.info(
@@ -2129,6 +2137,7 @@ def run_external_validation_mode():
 
     try:
         reference_raw = read_excel_upload(reference_upload)
+        reference_raw = build_landmark_features(reference_raw)
     except Exception as exc:
         st.error("The reference Excel file could not be read.")
         st.exception(exc)
@@ -2138,6 +2147,10 @@ def run_external_validation_mode():
         f"Reference dataset: **{reference_raw.shape[0]:,} rows × "
         f"{reference_raw.shape[1]:,} columns**"
     )
+
+    reference_has_mms = (MMS_PREDICTOR in reference_raw.columns and reference_raw[MMS_PREDICTOR].notna().any())
+    APPROVED_PREDICTORS = BASE_PREDICTORS + ([MMS_PREDICTOR] if reference_has_mms else [])
+    MODEL_CONFIGURATION = "4-predictor" if reference_has_mms else "3-predictor"
 
     reference_mapping, reference_target_source = schema_mapping_ui(
         reference_raw,
@@ -2180,6 +2193,7 @@ def run_external_validation_mode():
 
     try:
         external_raw = read_excel_upload(external_upload)
+        external_raw = build_landmark_features(external_raw)
     except Exception as exc:
         st.error("The external Excel file could not be read.")
         st.exception(exc)
@@ -2189,6 +2203,15 @@ def run_external_validation_mode():
         f"External dataset: **{external_raw.shape[0]:,} rows × "
         f"{external_raw.shape[1]:,} columns**"
     )
+
+    if MODEL_CONFIGURATION == "4-predictor" and not (MMS_PREDICTOR in external_raw.columns and external_raw[MMS_PREDICTOR].notna().any()):
+        st.error(
+            "The reference dataset uses the 4-predictor configuration, but the external "
+            "dataset does not contain usable Maternal Multiple Micronutrient Supplementation "
+            "(MMS) start information. Provide the MMS-start field or develop a separate "
+            "3-predictor reference model."
+        )
+        st.stop()
 
     external_mapping, external_target_source = schema_mapping_ui(
         external_raw,
@@ -2547,6 +2570,42 @@ def run_external_validation_mode():
 
 
 # ==============================================================================
+# AUTOMATIC INPUT SCHEMA NORMALIZATION
+# ==============================================================================
+
+def auto_canonicalize_prediction_inputs(df: pd.DataFrame) -> pd.DataFrame:
+    """Map common uploaded predictor names to the canonical SafeTriage schema."""
+    global APPROVED_PREDICTORS, MODEL_CONFIGURATION
+    normalized = {normalized_column_name(c): c for c in df.columns}
+
+    def find_alias(canonical: str):
+        for candidate in [canonical] + COLUMN_ALIASES.get(canonical, []):
+            source = normalized.get(normalized_column_name(candidate))
+            if source is not None:
+                return source
+        return None
+
+    base_mapping = {c: find_alias(c) for c in BASE_PREDICTORS}
+    if not all(v is not None for v in base_mapping.values()):
+        return df
+
+    mms_source = find_alias(MMS_PREDICTOR)
+    if mms_source is not None and df[mms_source].notna().any():
+        APPROVED_PREDICTORS = BASE_PREDICTORS + [MMS_PREDICTOR]
+        MODEL_CONFIGURATION = "4-predictor"
+    else:
+        APPROVED_PREDICTORS = BASE_PREDICTORS.copy()
+        MODEL_CONFIGURATION = "3-predictor"
+
+    target_aliases = [TARGET_COLUMN, "gdm", "gdm status", "gdm outcome", "gestational diabetes", "gestational diabetes mellitus"]
+    target_source = next((normalized.get(normalized_column_name(a)) for a in target_aliases if normalized.get(normalized_column_name(a)) is not None), None)
+    predictor_mapping = dict(base_mapping)
+    if MODEL_CONFIGURATION == "4-predictor":
+        predictor_mapping[MMS_PREDICTOR] = mms_source
+    return apply_schema_mapping(df, predictor_mapping, target_source or "")
+
+
+# ==============================================================================
 # ANALYSIS MODE ROUTING
 # ==============================================================================
 
@@ -2570,9 +2629,13 @@ if uploaded_file is None:
         """
         ### Getting started
 
-        Upload an Excel dataset containing the required GDM target and
-        antepartum predictor variables. For datasets with different column
-        names, use **External Validation** mode.
+        Upload an Excel dataset containing the GDM target and the base antepartum
+        predictors. The app automatically detects whether usable Maternal Multiple
+        Micronutrient Supplementation (MMS) start information is available and
+        selects the 3-predictor or 4-predictor configuration.
+
+        The 4-predictor configuration uses **MMS started by week 28**, derived from
+        the raw MMS start week when necessary.
 
         The application will then:
 
@@ -2581,7 +2644,7 @@ if uploaded_file is None:
         - perform the leakage-aware 60/15/25 split;
         - apply MICE-style imputation;
         - apply ROSE-style balancing **only to training data**;
-        - train the three specified models;
+        - train the three specified model families under the detected 3- or 4-predictor configuration;
         - generate ensemble predictions;
         - determine the decision threshold from calibration data;
         - evaluate the untouched test set;
@@ -2611,9 +2674,9 @@ try:
         df
     )
 
-    # Build any supported landmark-derived fields before validation. The final
-    # public three-predictor model does not require MMS timing from end users.
+    # Build supported landmark-derived fields and normalize common input names.
     df = build_landmark_features(df)
+    df = auto_canonicalize_prediction_inputs(df)
 
 except Exception as exc:
 
@@ -2632,72 +2695,47 @@ except Exception as exc:
 # DATA VALIDATION
 # ==============================================================================
 
-st.subheader(
-    "1. Dataset validation"
-)
+st.subheader("1. Dataset validation")
+
+# Automatically select the model specification. A usable MMS-start field
+# activates the 4-predictor configuration; otherwise the 3-predictor model is used.
+if MMS_PREDICTOR in df.columns and df[MMS_PREDICTOR].notna().any():
+    APPROVED_PREDICTORS = BASE_PREDICTORS + [MMS_PREDICTOR]
+    MODEL_CONFIGURATION = "4-predictor"
+else:
+    APPROVED_PREDICTORS = BASE_PREDICTORS.copy()
+    MODEL_CONFIGURATION = "3-predictor"
 
 col1, col2, col3, col4 = st.columns(4)
-
 with col1:
-    st.metric(
-        "Rows",
-        f"{df.shape[0]:,}",
-    )
-
+    st.metric("Rows", f"{df.shape[0]:,}")
 with col2:
-    st.metric(
-        "Columns",
-        f"{df.shape[1]:,}",
-    )
-
+    st.metric("Columns", f"{df.shape[1]:,}")
 with col3:
-    st.metric(
-        "GDM column",
-        "Found"
-        if TARGET_COLUMN in df.columns
-        else "Missing",
-    )
-
+    st.metric("GDM column", "Found" if TARGET_COLUMN in df.columns else "Missing")
 with col4:
-    available_predictors = [
-        column
-        for column in APPROVED_PREDICTORS
-        if column in df.columns
-    ]
+    st.metric("Predictor configuration", MODEL_CONFIGURATION)
 
-    st.metric(
-        "Predictors found",
-        f"{len(available_predictors)}/{len(APPROVED_PREDICTORS)}",
+if MODEL_CONFIGURATION == "4-predictor":
+    st.success(
+        "4-predictor configuration detected: maternal age + pre-pregnancy BMI + parity + "
+        "Maternal Multiple Micronutrient Supplementation (MMS) started by week 28."
     )
-
+else:
+    st.info(
+        "3-predictor configuration detected: maternal age + pre-pregnancy BMI + parity. "
+        "No usable MMS-start field was detected, so the MMS predictor is not required."
+    )
 
 if TARGET_COLUMN not in df.columns:
-
-    st.error(
-        f"Required target column `{TARGET_COLUMN}` was not found."
-    )
-
+    st.error(f"Required target column `{TARGET_COLUMN}` was not found.")
     st.stop()
 
-
-missing_predictors = [
-    column
-    for column in APPROVED_PREDICTORS
-    if column not in df.columns
-]
-
+missing_predictors = [c for c in BASE_PREDICTORS if c not in df.columns]
 if missing_predictors:
-
-    st.error(
-        "Required antepartum predictor columns are missing:"
-    )
-
-    st.write(
-        missing_predictors
-    )
-
+    st.error("Required base predictor columns are missing:")
+    st.write(missing_predictors)
     st.stop()
-
 
 # ==============================================================================
 # TARGET PREPARATION
