@@ -1,21 +1,46 @@
-# SafeTriage-GDM Test Datasets
+# SafeTriage-GDM Datasets
 
-These Excel files are **synthetic test datasets** created for testing the public SafeTriage-GDM application. They are not derived from real patient records and must not be interpreted as clinical validation data.
+This directory contains the **public CBGS research dataset** used for reproducible model-development demonstrations and several **synthetic datasets** used to test SafeTriage-GDM software functionality.
 
-## Predictor configurations
+## 1. Cambridge Baby Growth Study (CBGS) dataset
 
-The application supports two explicitly selectable configurations. Select the intended configuration in the app sidebar before uploading or validating a dataset.
+### `dataCBGS_dataset.xlsx`
 
-### 3 predictors
+This is the publicly deposited Cambridge Baby Growth Study dataset associated with the research publication on multiple micronutrient supplementation during pregnancy and offspring growth.
+
+**Official Cambridge repository record:**  
+https://www.repository.cam.ac.uk/items/ca23c466-948b-4981-a415-c74c6ef139dc
+
+**Repository DOI:**  
+https://doi.org/10.17863/CAM.54014
+
+**Dataset title:**  
+*Data related to "Multiple micronutrient supplementation during pregnancy and increased birth weight and skinfold thicknesses in the offspring: the Cambridge Baby Growth Study"*
+
+**Repository-listed authors:** Clive Petry, Kenneth Ong, Ieuan Hughes, and David Dunger.
+
+The University of Cambridge repository describes the file as an Excel dataset containing data relevant to the associated publication and states that, except where otherwise noted, the item's licence is **Attribution 4.0 International (CC BY 4.0)**.
+
+The CBGS dataset is **third-party research data**. It is not owned or created by the SafeTriage-GDM project.
+
+For the authoritative licence, metadata, provenance, and citation information, consult the original Cambridge repository record.
+
+## 2. Predictor configurations
+
+SafeTriage-GDM supports two explicitly selectable configurations.
+
+### 3-predictor configuration
 
 1. Maternal age
-2. Pre-pregnancy BMI
+2. Mother's pre-pregnancy BMI
 3. Parity
 
-### 4 predictors
+MMS columns may be present in the dataset but are ignored when this configuration is selected.
+
+### 4-predictor configuration
 
 1. Maternal age
-2. Pre-pregnancy BMI
+2. Mother's pre-pregnancy BMI
 3. Parity
 4. **Maternal Multiple Micronutrient Supplementation (MMS) started by week 28**
 
@@ -28,39 +53,78 @@ For the 4-predictor configuration:
 0 = MMS started after week 28
 ```
 
-The application can also derive this indicator from a recognized raw MMS start-week field.
+The application can derive this binary variable from a recognized raw MMS start-week field.
 
-## Files
+## 3. Synthetic software-test datasets
 
 ### `SafeTriage_GDM_external_synthetic_test.xlsx`
+
 - 1,100 rows
-- 1,000 labeled observations and 100 unlabeled observations
+- 1,000 labelled observations and 100 unlabelled observations
 - 3 predictors + GDM outcome
+- Intended to test the 3-predictor workflow
 
 ### `SafeTriage_GDM_external_renamed_schema_test.xlsx`
-- Same 3-predictor synthetic structure
-- Uses `parity_count` instead of `parity`
-- Tests schema mapping
+
+- 1,100 rows
+- 3-predictor synthetic structure
+- Uses an alternative parity field such as `parity_count`
+- Intended to test schema mapping and column-name flexibility
 
 ### `SafeTriage_GDM_fairness_psi_stress_test.xlsx`
+
 - 1,500 rows
-- 1,000 labeled observations and 500 unlabeled observations
-- Shifted synthetic age/BMI distributions
-- Intended for fairness and PSI monitoring tests
+- 1,000 labelled observations and 500 unlabelled observations
+- Contains shifted synthetic age/BMI distributions
+- Intended to exercise fairness and PSI monitoring
 
 ### `SafeTriage_GDM_4predictor_synthetic_test.xlsx`
+
 - 1,100 rows
-- 1,000 labeled observations and 100 unlabeled observations
-- Includes `MMS_started_by_28_weeks`
+- 1,000 labelled observations and 100 unlabelled observations
+- Contains `MMS_started_by_28_weeks`
 - Intended to test the explicitly selected 4-predictor configuration
 
 ### `SafeTriage_GDM_4predictor_raw_MMS_start_test.xlsx`
-- Same general synthetic population as the 4-predictor test
-- Contains a raw MMS start-week field instead of `MMS_started_by_28_weeks`
-- Intended to test derivation of the week-28 MMS indicator within the explicitly selected 4-predictor configuration
 
-## Important
+- Synthetic 4-predictor test population
+- Contains raw MMS start-week information rather than the binary indicator
+- Intended to test derivation of the week-28 MMS indicator
 
-All values and outcomes in these workbooks are synthetic. They are provided for software and methodology testing only and do not represent clinical truth, patient records, or external clinical validation.
+## 4. How to use these datasets
 
-Do not add the original individual-level CBGS dataset to a public GitHub repository.
+### Build & Evaluate Model
+
+Use the CBGS dataset when you want to reproduce the research model-development workflow.
+
+Use the synthetic datasets to test the application without relying on an additional real-world cohort.
+
+### External Validation
+
+For genuine external validation, use an independent real-world dataset that was not used to train or tune the reference model.
+
+The synthetic datasets can be uploaded to **test the external-validation software workflow**, but their resulting performance metrics must **not** be described as clinical external validation.
+
+## 5. Important limitations
+
+All synthetic values and outcomes in the synthetic workbooks are artificial.
+
+They do not represent:
+
+- real patients,
+- clinical measurements,
+- clinical outcomes,
+- a representative external population,
+- or evidence of clinical model validity.
+
+The CBGS dataset, by contrast, is a publicly deposited third-party research dataset. Its use and redistribution remain subject to the original Cambridge repository licence and terms.
+
+## 6. Data provenance
+
+For the CBGS source, always refer to:
+
+https://www.repository.cam.ac.uk/items/ca23c466-948b-4981-a415-c74c6ef139dc
+
+and:
+
+https://doi.org/10.17863/CAM.54014
