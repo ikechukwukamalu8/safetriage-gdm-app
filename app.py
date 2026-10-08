@@ -338,7 +338,6 @@ APPROVED_PREDICTORS = [
     "Mother's age (years)",
     "Mother's pre-pregnancy BMI (kg/m2)",
     "Parity",
-    "MMS started by 28 weeks",
 ]
 
 EXPECTED_MODEL_ORDER = [
@@ -476,8 +475,8 @@ with st.sidebar:
 
     st.header("Pipeline")
     st.info(
-        "Locked predictors: maternal age, pre-pregnancy BMI, parity, and "
-        "MMS started by 28 weeks. Whole-pregnancy MMS exposure, MMS stop, "
+        "Locked predictors: maternal age, pre-pregnancy BMI, and parity. "
+        "MMS timing and whole-pregnancy MMS exposure, MMS stop, "
         "whole-pregnancy duration, final pregnancy outcomes, and newborn "
         "measurements are not used as predictors."
     )
@@ -1855,7 +1854,7 @@ PREDICTOR_LABELS = {
 COLUMN_ALIASES = {
     "Mother's age (years)": ["maternal age", "mother age", "age years", "age"],
     "Mother's pre-pregnancy BMI (kg/m2)": ["pre pregnancy bmi", "prepregnancy bmi", "prepreg bmi", "pre pregnancy body mass index", "bmi"],
-    "Parity": ["parity", "number of previous births", "birth order"],
+    "Parity": ["parity", "parity count", "number of previous births", "birth order"],
     "MMS started by 28 weeks": [
         "mms started by 28 weeks",
         "mms_started_by_28_weeks",
@@ -2612,9 +2611,8 @@ try:
         df
     )
 
-    # The strict model uses a derived 28-week MMS feature. The original
-    # dataCBGS_dataset contains the raw MMS start-week field, not the derived
-    # column, so construct it before predictor validation.
+    # Build any supported landmark-derived fields before validation. The final
+    # public three-predictor model does not require MMS timing from end users.
     df = build_landmark_features(df)
 
 except Exception as exc:
