@@ -1663,17 +1663,15 @@ def fairness_audit(
             ground_truth_mask
         ]
 
-        if len(y_group) > 0:
+        # FPR is undefined when the subgroup contains no actual negative cases.
+        # Do not replace a zero denominator with 1: that can falsely report FPR=0.
+        negative_count = int((y_group == 0).sum())
 
-            fpr = (
+        if negative_count > 0:
+            false_positives = int(
                 ((p_group == 1) & (y_group == 0)).sum()
-                /
-                max(
-                    1,
-                    (y_group == 0).sum(),
-                )
             )
-
+            fpr = false_positives / negative_count
         else:
             fpr = np.nan
 
@@ -2128,6 +2126,27 @@ def read_excel_upload(uploaded_file) -> pd.DataFrame:
     return clean_dataframe(pd.read_excel(io.BytesIO(uploaded_file.getvalue())))
 
 
+def find_invalid_external_numeric_values(
+    X_external: pd.DataFrame,
+    X_reference: pd.DataFrame,
+) -> dict[str, int]:
+    """Count non-missing external values that cannot be parsed as reference-numeric predictors."""
+    invalid_counts = {}
+
+    for column in X_external.columns:
+        if not pd.api.types.is_numeric_dtype(X_reference[column].dtype):
+            continue
+
+        raw_values = X_external[column]
+        parsed_values = pd.to_numeric(raw_values, errors="coerce")
+        invalid_mask = raw_values.notna() & parsed_values.isna()
+        count = int(invalid_mask.sum())
+        if count:
+            invalid_counts[column] = count
+
+    return invalid_counts
+
+
 def align_external_feature_types(
     X_external: pd.DataFrame,
     X_reference: pd.DataFrame,
@@ -2360,9 +2379,29 @@ def run_external_validation_mode():
     # supplementation timing variables as numeric weeks relative to pregnancy
     # start. This prevents strings in an external workbook from being passed
     # into the reference IterativeImputer.
+    raw_external_features = external_df[APPROVED_PREDICTORS].copy()
+    invalid_numeric_counts = find_invalid_external_numeric_values(
+        raw_external_features,
+        X_train[APPROVED_PREDICTORS],
+    )
+    if invalid_numeric_counts:
+        invalid_numeric_table = pd.DataFrame(
+            [
+                {"Predictor": column, "Unparseable non-missing values": count}
+                for column, count in invalid_numeric_counts.items()
+            ]
+        )
+        st.warning(
+            "Some external values in numeric predictors could not be interpreted "
+            "as numbers. They will be treated as missing by the input-alignment "
+            "step and handled by the frozen reference imputer. Review these counts "
+            "before interpreting the external-validation results."
+        )
+        st.dataframe(invalid_numeric_table, width="stretch", hide_index=True)
+
     external_features = align_external_feature_types(
-        external_df[APPROVED_PREDICTORS],
-        X_train,
+        raw_external_features,
+        X_train[APPROVED_PREDICTORS],
     )
 
     try:
